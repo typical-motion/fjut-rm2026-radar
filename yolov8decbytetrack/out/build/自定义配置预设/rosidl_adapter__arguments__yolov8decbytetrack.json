@@ -1,0 +1,7 @@
+{
+  "package_name": "yolov8decbytetrack",
+  "non_idl_tuples": [
+    "/home/zqz/ros2_ws/yolov8decbytetrack:msg/Target.msg",
+    "/home/zqz/ros2_ws/yolov8decbytetrack:msg/Detection.msg"
+  ]
+}

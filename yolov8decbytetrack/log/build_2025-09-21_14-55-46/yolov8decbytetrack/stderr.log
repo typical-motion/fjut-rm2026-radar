@@ -1,0 +1,8 @@
+[31mCMake Error at /home/zqz/ros2_ws/install/tutorial_interfaces/share/tutorial_interfaces/cmake/ament_cmake_export_libraries-extras.cmake:48 (message):
+  Package 'tutorial_interfaces' exports the library 'tutorial_interfaces'
+  which couldn't be found
+Call Stack (most recent call first):
+  /home/zqz/ros2_ws/install/tutorial_interfaces/share/tutorial_interfaces/cmake/tutorial_interfacesConfig.cmake:41 (include)
+  CMakeLists.txt:48 (find_package)
+
+[0m

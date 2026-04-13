@@ -1,0 +1,4 @@
+[0.009s] Invoking command in '/home/zqz/ros2_ws/yolov8decbytetrack/build/yolov8decbytetrack': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake /home/zqz/ros2_ws/yolov8decbytetrack -DCMAKE_INSTALL_PREFIX=/home/zqz/ros2_ws/yolov8decbytetrack/install/yolov8decbytetrack
+[0.018s] [0mCMake Error: The source directory "/home/zqz/ros2_ws/yolov8decbytetrack" does not appear to contain CMakeLists.txt.
+[0.018s] Specify --help for usage, or press the help button on the CMake GUI.[0m
+[0.019s] Invoked command in '/home/zqz/ros2_ws/yolov8decbytetrack/build/yolov8decbytetrack' returned '1': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble DEBUGINFOD_URLS=https://debuginfod.ubuntu.com /usr/bin/cmake /home/zqz/ros2_ws/yolov8decbytetrack -DCMAKE_INSTALL_PREFIX=/home/zqz/ros2_ws/yolov8decbytetrack/install/yolov8decbytetrack
