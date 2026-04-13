@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>serial_node</name>
+  <version>0.0.0</version>
+  <description>ROS2 package for serial communication and publishing robot positions.</description>
+  <maintainer email="you@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- build / run dependencies -->
+  <build_depend>rclcpp</build_depend>
+  <build_depend>tutorial_interfaces</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <!-- 如果你的代码包含 <serial/serial.h> 并依赖 wjwwood/serial，请保留 serial -->
+  <build_depend>serial</build_depend>
+  <!-- OpenCV 在系统上通常作为外部库，很多包使用 opencv4 -->
+  <build_depend>opencv4</build_depend>
+
+  <exec_depend>rclcpp</exec_depend>
+  <exec_depend>tutorial_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>serial</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
