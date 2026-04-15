@@ -35,7 +35,8 @@ inline float sigmoid(float x)
 void nms_(std::vector<Detection>& detections,float iouThreshold)
 {
     auto t_post_start = std::chrono::high_resolution_clock::now();
-    std::sort(detections.begin(), detections.end(),[](const Detection& a, const Detection& b) {return a.confidence > b.confidence;});
+
+    std::sort(detections.begin(), detections.end(),[](const Detection& a, const Detection& b) {return a.confidence > b.confidence;});//置信度排序
     //std::cout << "detections size before nms: " << detections.size() << std::endl;
     
     std::vector<bool> keep(detections.size(), true);
@@ -67,6 +68,79 @@ void nms_(std::vector<Detection>& detections,float iouThreshold)
     //            << std::endl;
 
 }
+
+void fast_nms(std::vector<Detection>& detections,float iouThreshold)
+{
+    if (detections.empty())
+    {
+        return;
+    }
+
+    std::sort(detections.begin(), detections.end(), [](const Detection& a, const Detection& b)
+    {
+        return a.confidence > b.confidence;
+    });
+
+    const size_t n = detections.size();
+    std::vector<bool> suppressed(n, false);
+
+    std::vector<float> areas(n);
+    for (size_t i = 0; i < n; ++i) 
+    {
+        areas[i] = static_cast<float>(detections[i].box.area());
+    }
+
+    for (size_t i = 0; i < n; ++i) 
+    {
+        if (suppressed[i]) continue;
+        
+        const cv::Rect& box_i = detections[i].box;
+        
+        // 内层循环优化：提前计算交集区域
+        for (size_t j = i + 1; j < n; ++j) 
+        {
+            if (suppressed[j]) continue;
+            
+            const cv::Rect& box_j = detections[j].box;
+            
+            // 计算交集区域
+            int inter_x1 = std::max(box_i.x, box_j.x);
+            int inter_y1 = std::max(box_i.y, box_j.y);
+            int inter_x2 = std::min(box_i.x + box_i.width, box_j.x + box_j.width);
+            int inter_y2 = std::min(box_i.y + box_i.height, box_j.y + box_j.height);
+            
+            // 如果没有交集，跳过
+            if (inter_x2 <= inter_x1 || inter_y2 <= inter_y1) {
+                continue;
+            }
+            
+            // 计算交集面积
+            float inter_area = static_cast<float>((inter_x2 - inter_x1) * (inter_y2 - inter_y1));
+            
+            // 计算并集面积
+            float union_area = areas[i] + areas[j] - inter_area;
+            
+            // 计算IoU
+            float iou = inter_area / union_area;
+            
+            // 如果IoU超过阈值，抑制该框
+            if (iou > iouThreshold) 
+            {
+                suppressed[j] = true;
+            }
+        }
+    }
+}
+
+void adaptive_nms(std::vector<Detection>& detections, float baseIouThreshold) {
+    // 根据检测框密度自适应调整IoU阈值
+    float density = static_cast<float>(detections.size()) / (modelShape.width * modelShape.height);
+    float adaptiveThreshold = baseIouThreshold * (1.0f + density * 10.0f);
+    
+    // 使用调整后的阈值执行NMS
+    nms_(detections, adaptiveThreshold);
+}
+
 
 static void print_dims(const nvinfer1::Dims& d)
 {
@@ -346,30 +420,42 @@ void Inference_trt::loadTensorRTEngine(const std::string &enginePath)//初始化
 
 }
 
+/**
+ * @brief 使用TensorRT引擎执行目标检测推理
+ * @param input 输入图像（OpenCV Mat格式）
+ * @return std::vector<Detection> 检测结果向量，包含检测到的目标框、置信度和类别信息
+ */
 std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input)
 {
 
+    // 检查TensorRT引擎是否已加载
     if (!trtContext) 
     {
         throw std::runtime_error("TensorRT engine not loaded");
     }
 
+    // 记录开始时间
     auto t_start = std::chrono::high_resolution_clock::now();
 
+    // --- 图像预处理 ---
     cv::Mat modelInput = input;
-    int pad_x, pad_y;
-    float scale;
+    int pad_x{0};
+    int pad_y{0};
+    float scale{1.0f};
+    // 如果需要letterbox处理且模型输入是正方形
     if (letterBoxForSquare && modelShape.width == modelShape.height)
         modelInput = formatToSquare(modelInput, &pad_x, &pad_y, &scale);
     // --- 预处理 ---
     auto t_pre_start = std::chrono::high_resolution_clock::now();
     cv::Mat inputBlob;
-    cv::dnn::blobFromImage(modelInput, inputBlob, 1.0/255.0, modelShape, cv::Scalar(), true, false);
+    cv::dnn::blobFromImage(modelInput, inputBlob, 1.0f/255.0f, modelShape, cv::Scalar(), true, false);
     size_t blob_bytes = inputBlob.total() * inputBlob.elemSize();
+
     if (blob_bytes > inputSize)
     {
         std::cerr << "Warning: input blob size (" << blob_bytes << ") > expected inputSize (" << inputSize << "). Using min size to copy.\n";
     }
+
     size_t copy_bytes = std::min(blob_bytes, inputSize);
     auto t_pre_end = std::chrono::high_resolution_clock::now();
 
@@ -378,16 +464,19 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
 
     // --- H2D (measure) ---
     auto t_h2d_start = std::chrono::high_resolution_clock::now();
+
     cudaError_t err_mem1 = cudaMemcpyAsync(deviceBuffers[inputIndex], inputData.data(), inputSize, cudaMemcpyHostToDevice, cudaStream);
     if(err_mem1 != cudaSuccess)
     {
         std::cerr << "cudamem failed" << cudaGetErrorString(err_mem1) << std::endl;
         throw std::runtime_error("cudamem failed");
     }
+
     auto t_h2d_end = std::chrono::high_resolution_clock::now();
 
     // --- 推理 ---
     auto t_inf_start = std::chrono::high_resolution_clock::now();
+
     if (!trtContext->enqueueV3(cudaStream)) {
         throw std::runtime_error("Failed to execute inference");
     }
@@ -398,6 +487,7 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
         std::cerr << "cudastream failed" << cudaGetErrorString(err_stream) << std::endl;
         throw std::runtime_error("cudastream failed");
     }
+
     auto t_inf_end = std::chrono::high_resolution_clock::now();
 
     // --- D2H ---
