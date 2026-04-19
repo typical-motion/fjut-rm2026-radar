@@ -12,6 +12,7 @@
 | `yolov8decbytetrack` | **YOLOv11 + TensorRT 加速推理 + ByteTrack 目标跟踪** | 稳定 |
 | `tutorial-interfaces` | 自定义 ROS2 消息接口 | 稳定 |
 | `serial` | 串口通信功能包 | **未测试** |
+| `laser_detect` | 视觉激光检测 | **未测试** |
 
 > 注：原包名 `yolov8decbytetrack` 实际使用 YOLOv11 模型 + TensorRT 推理加速，并集成 ByteTrack 多目标跟踪算法。
 
