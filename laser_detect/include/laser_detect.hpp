@@ -26,6 +26,26 @@
 
 
 
+
+struct Detection
+{
+    int class_id{0};
+    std::string className{};
+    float confidence{0.0};
+    cv::Scalar color{};
+    cv::Rect box{};
+};
+
+class Logger : public nvinfer1::ILogger {
+public:
+    void log(Severity severity, const char* msg) noexcept override {
+        // 忽略INFO级别的日志
+        if (severity <= Severity::kWARNING) {
+            std::cout << msg << std::endl;
+        }
+    }
+};
+
 class Inference_trt
 {
 public:

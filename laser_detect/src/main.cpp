@@ -102,20 +102,6 @@ public:
     }
 
 private:
-    // Process tracked results: draw boxes + labels on frame and fill msg
-    std::vector<Detection> processAndPublishTracks(std::vector<Detection>& detections, cv::Mat& frame, Inference& inf_armor)
-{
-    // 创建ROS消息对象
-    auto msg = tutorial_interfaces::msg::Detection();
-    // 存储检测目标中心点坐标
-    std::vector<cv::Point2f> points;
-    //std::vector<std::string> classes_armor_{};  // [调试] 存储装甲板类别名称
-    
-    
-
-    // 返回装甲板检测结果和中心点坐标
-    return std::make_tuple(detections_armor, points);
-}
 
 
     void timerCallback()
@@ -144,7 +130,6 @@ private:
             float fps_value = 0.0f;
             while (running)
             {
-
                 cv::Mat frame_rgb = hik_camera.getLatestFrame();//海康录取到的通道和实际通道存在问题，直接使用opencv修改，其实可以直接改驱动（目前直接堆一个vector存frame
                 stl_video.push_back(frame_rgb);
                 cv::cvtColor(frame_rgb, frame, cv::COLOR_RGB2BGR);
@@ -157,7 +142,7 @@ private:
 
                 //读取保存路径并设置格式
 
-                // --- 推理: 车辆 (TensorRT) ---
+                // --- 推理: 激光检测装置 (TensorRT) ---
                 std::vector<Detection> detections;
                 try 
                 {
@@ -167,32 +152,35 @@ private:
                 catch (const std::exception& e) 
                 {
                     RCLCPP_ERROR(this->get_logger(), "Inference error: %s", e.what());
-                    return;
+                    continue;
                 }
-
-                // Convert detections to byte_track::Object and update tracker
-
-
-                // draw and publish
-                std::vector<Detection> result = processAndPublishTracks(detections, frame, *inf_armor_);
-                std::vector<std::string> classes_name;
-                auto msg = tutorial_interfaces::msg::Detection();
-                for (int i = 0; i < result.size() && i < result_points.size(); i++)
+                if (!detections.empty())
                 {
-                    tutorial_interfaces::msg::Target target_msg;
-                        //msg.class_number = result_detections_armor.size();
-                    target_msg.confidence = result_detections_armor[i].confidence;
-                    target_msg.class_name = result_detections_armor[i].className;
-                    target_msg.x = result_points[i].x;
-                    target_msg.y = result_points[i].y;
-                    RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
-                    msg.targets.push_back(target_msg);
+                    auto msg = tutorial_interfaces::msg::Detection();
 
-                        
-                        //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
-                        
+                    for (const auto& detection : detections)
+                    {
+                        cv::rectangle(frame, detection.rect, cv::Scalar(0, 255, 0), 2);
+                        std::string label = detection.className + ": " + std::to_string(detection.confidence);
+                        int baseline = 0;
+                        cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.9, 2, &baseline);
+                        cv::Point text_pos(detection.rect.x, std::max(0, detection.rect.y - text_size.height - 10));
+                        cv::putText(frame, label, text_pos, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
+
+                        tutorial_interfaces::msg::Target target_msg;
+                        target_msg.confidence = detection.confidence;
+                        target_msg.class_name = detection.className;
+                        target_msg.x = detection.rect.x + detection.rect.width / 2;
+                        target_msg.y = detection.rect.y + detection.rect.height / 2;
+                        RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
+                        msg.targets.push_back(target_msg);
+                            //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
+                    }
+
+                    publisher_detection->publish(msg);
                 }
-                publisher_detection->publish(msg);
+
+
                 frame_count++;
 
                 fps_frame_count++;
@@ -281,72 +269,83 @@ private:
                 return;
             }
             RCLCPP_INFO(this->get_logger(), "Video opened");
+            
             bool running = true;
             std::chrono::steady_clock::time_point fps_start_time = std::chrono::steady_clock::now();
-            auto avg_start_time = fps_start_time;
+            auto start_time = std::chrono::high_resolution_clock::now();
             int fps_frame_count = 0;
             float fps_value = 0.0f;
-            size_t total_frame_count = 0;
+            int frame_count = 0;
+
             while (running)
             {
                 cap_ >> frame;
-                //cv::Mat frame = cv::imread("/home/zqz/fjut_radar/image/test_image.jpg");
                 if (frame.empty())
                 {
                     running = false;
                     break;
                 }
-                // --- 推理: 车辆 (TensorRT) ---
+
+                // --- 推理: 激光检测装置 (TensorRT) ---
                 std::vector<Detection> detections;
-                try {
+                try 
+                {
                     detections = inferencethrow_trt(*inf_light_trt, frame);
                     //detections = inferencethrow_onnx(*inf_light_onnx, frame);
-                } catch (const std::exception& e) {
-                    RCLCPP_ERROR(this->get_logger(), "Inference error: %s", e.what());
-                    return;
-                }
-
-                // tracking
-                std::vector<byte_track::Object> objects = detectionsToObjects(detections);
-                std::vector<std::shared_ptr<STrack>> tracked = tracker_.update(objects);
-
-
-                // draw and publish
-                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_);
-                std::vector<Detection> result_detections_armor = std::get<0>(result);
-                std::vector<cv::Point2f> result_points = std::get<1>(result);
-                std::vector<std::string> classes_name;
-                auto msg = tutorial_interfaces::msg::Detection();
-                for (int i = 0; i < result_detections_armor.size() && i < result_points.size(); i++)
+                } 
+                catch (const std::exception& e) 
                 {
-                    tutorial_interfaces::msg::Target target_msg;
-                        //msg.class_number = result_detections_armor.size();
-                    target_msg.confidence = result_detections_armor[i].confidence;
-                    target_msg.class_name = result_detections_armor[i].className;
-                    target_msg.x = result_points[i].x;
-                    target_msg.y = result_points[i].y;
-                    RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
-                    msg.targets.push_back(target_msg);
-
-                        
-                        //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
-
+                    RCLCPP_ERROR(this->get_logger(), "Inference error: %s", e.what());
+                    continue;
                 }
-                publisher_detection->publish(msg);
+
+                // 处理检测结果
+                if (!detections.empty())
+                {
+                    auto msg = tutorial_interfaces::msg::Detection();
+
+                    for (const auto& detection : detections)
+                    {
+                        // 绘制检测框
+                        cv::rectangle(frame, detection.rect, cv::Scalar(0, 255, 0), 2);
+                        
+                        // 绘制标签
+                        std::string label = detection.className + ": " + std::to_string(detection.confidence);
+                        int baseline = 0;
+                        cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.9, 2, &baseline);
+                        cv::Point text_pos(detection.rect.x, std::max(0, detection.rect.y - text_size.height - 10));
+                        cv::putText(frame, label, text_pos, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
+
+                        // 填充消息
+                        tutorial_interfaces::msg::Target target_msg;
+                        target_msg.confidence = detection.confidence;
+                        target_msg.class_name = detection.className;
+                        target_msg.x = detection.rect.x + detection.rect.width / 2;
+                        target_msg.y = detection.rect.y + detection.rect.height / 2;
+                        
+                        RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", 
+                                target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
+                        msg.targets.push_back(target_msg);
+                    }
+
+                    publisher_detection->publish(msg);
+                }
+
+                // FPS计算
+                frame_count++;
                 fps_frame_count++;
                 auto fps_now = std::chrono::steady_clock::now();
                 float fps_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         fps_now - fps_start_time).count();
 
-                if (fps_elapsed >= 200.0f)
+                if (fps_elapsed >= 200.0f)   // 每 200ms 更新一次
                 {
                     fps_value = fps_frame_count * 1000.0f / fps_elapsed;
                     fps_frame_count = 0;
                     fps_start_time = fps_now;
                 }
 
-                total_frame_count++;
-
+                // 绘制FPS
                 cv::rectangle(frame, cv::Point(5,5), cv::Point(220,45), cv::Scalar(0,0,0), -1);
                 cv::putText(
                     frame,
@@ -357,40 +356,54 @@ private:
                     cv::Scalar(0, 255, 0),
                     2
                 );
-                cv::namedWindow("hik",cv::WINDOW_NORMAL);
-                cv::resizeWindow("hik",800,600);
+
+                // 显示窗口
+                cv::namedWindow("hik", cv::WINDOW_NORMAL);
+                cv::resizeWindow("hik", 800, 600);
                 cv::imshow("hik", frame);
+
+                // 每30帧输出一次统计信息
+                if (frame_count % 30 == 0) 
+                {
+                    auto current_time = std::chrono::high_resolution_clock::now();
+                    std::chrono::duration<double> elapsed = current_time - start_time;
+                    double fps_calculated = frame_count / elapsed.count();  // 计算FPS
+                    std::cout << "Processed Frames: " << fps_value << " | FPS: " << fps_calculated << std::endl;
+                }
+
+                // 检测ESC键
                 if (cv::waitKey(1) == 27)
                 {
-                    cv::destroyAllWindows();
                     running = false;
+                    std::cout << "\n正在停止处理..." << std::endl;
                 }
             }
+
+            cv::destroyAllWindows();
+            
+            // 输出最终统计信息
             auto avg_end_time = std::chrono::steady_clock::now();
-            double total_time_sec = std::chrono::duration_cast<std::chrono::duration<double>>(avg_end_time - avg_start_time).count();
-            double avg_fps = total_frame_count / std::max(total_time_sec, 1e-6);
+            double total_time_sec = std::chrono::duration_cast<std::chrono::duration<double>>(avg_end_time - start_time).count();
+            double avg_fps = frame_count / std::max(total_time_sec, 1e-6);
             RCLCPP_INFO(
-            this->get_logger(),
-            "Test video finished. Total frames: %zu, Time: %.2f s, Average FPS: %.2f", total_frame_count, total_time_sec, avg_fps);
+                this->get_logger(),
+                "Test video finished. Total frames: %d, Time: %.2f s, Average FPS: %.2f", 
+                frame_count, total_time_sec, avg_fps);
         }
+
     }
 
 
     // members
     bool runOnGPU_;
     std::string colcor_ = "blue";
-    std::vector<std::string> classes_car_;
-    std::vector<std::string> classes_armor_;
     std::unique_ptr<Inference_trt> inf_light_trt;
     //std::unique_ptr<Inference> inf_light_onnx;
-    std::unique_ptr<Inference> inf_armor_;
-    BYTETracker tracker_;
     cv::VideoCapture cap_;
     rclcpp::Publisher<tutorial_interfaces::msg::Detection>::SharedPtr publisher_detection;
     rclcpp::TimerBase::SharedPtr timer_;
     Config::HikConfig hik_config;
     cv::Mat frame;
-    cv::Size frame_size;
     std::string save_path = "/home/zqz/ros2_ws/output.avi";
     std::vector<cv::Mat> stl_video;
     int fourcc_code;
@@ -399,7 +412,7 @@ private:
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<inference_node>();
+    auto node = std::make_shared<laser_inference_node>();
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
