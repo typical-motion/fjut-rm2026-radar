@@ -1,4 +1,4 @@
-#include "inference.h"
+#include "laser_detect.hpp"
 
 Inference_trt::Inference_trt(const std::string &enginePath,const cv::Size &modelInputShape, const std::vector<std::string> &classes_, const bool &runWithCuda)
 {
@@ -171,30 +171,7 @@ void Inference_trt::loadTensorRTEngine(const std::string &enginePath)//初始化
             modelShape = cv::Size(W,H);
         }
     }
-
-    if (outputDims.nbDims == 3)
-    {
-        int d1 = outputDims.d[1];
-        int d2 = outputDims.d[2];
-
-        if ((d1 == 5 && d2 >5) || (d2 == 5 && d1 >5))
-        {
-            model_Type = ModeType::YOLOV11;
-            std::cout << "Model type: YOLOv11" << std::endl;
-        }
-
-        else if ((d1 == 17 && d2 >17) || (d2 == 17 && d1 >17))
-        {
-            model_Type = ModeType::YOLOV5;
-            std::cout << "Model type: YOLOv5" << std::endl;
-        }
-
-        else
-        {
-            model_Type = ModeType::YOLOV11;
-            std::cout << "Model type: YOLOv11" << std::endl;
-        }
-    }
+    
     // 获取数据类型
     nvinfer1::DataType inputDataType = trtEngine->getTensorDataType(inputTensorName.c_str());
     nvinfer1::DataType outputDataType = trtEngine->getTensorDataType(outputTensorName.c_str());

@@ -10,7 +10,6 @@
 #include <functional>
 #include <thread>
 #include <unordered_map>
-#include <nlohmann/json.hpp>
 #include <fstream>
 #include <chrono>
 #include <memory>
@@ -22,8 +21,7 @@
 #include <opencv2/highgui.hpp>
 #include <chrono>
 
-#include "inference.h"    // TensorRT-based inference wrapper (your class)
-#include "BYTETracker.h"
+#include "laser_detect.hpp"    // TensorRT-based inference wrapper (your class)
 #include "HikCamera.h"
 #include "config.h"
 
@@ -35,7 +33,6 @@
 #include "tutorial_interfaces/msg/target.hpp"
 
 using namespace std::chrono;
-using json = nlohmann::json;
 
 struct detection_info
 {
@@ -52,13 +49,8 @@ struct detection_info
 // Run TensorRT inference for a frame using provided Inference_trt instance
 static std::vector<Detection> inferencethrow_trt(Inference_trt& inf_light_trt, cv::Mat& frame)
 {
-    return inf_light.runInference_TensorRT(frame);
+    return inf_light_trt.runInference_TensorRT(frame);
 }//trt 加速车辆推理
-
-static std::vector<Detection> inferencethrow_onnx(Inference& inf_light, cv::Mat& frame)
-{
-    return inf_light.runInference(frame);
-} // opencv dnn 推理 trt用不了被选
 
 // Convert detections -> byte_track::Object vector
 
@@ -157,18 +149,18 @@ private:
 
                     for (const auto& detection : detections)
                     {
-                        cv::rectangle(frame, detection.rect, cv::Scalar(0, 255, 0), 2);
+                        cv::rectangle(frame, detection.box, cv::Scalar(0, 255, 0), 2);
                         std::string label = detection.className + ": " + std::to_string(detection.confidence);
                         int baseline = 0;
                         cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.9, 2, &baseline);
-                        cv::Point text_pos(detection.rect.x, std::max(0, detection.rect.y - text_size.height - 10));
+                        cv::Point text_pos(detection.box.x, std::max(0, detection.box.y - text_size.height - 10));
                         cv::putText(frame, label, text_pos, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
 
                         tutorial_interfaces::msg::Target target_msg;
                         target_msg.confidence = detection.confidence;
                         target_msg.class_name = detection.className;
-                        target_msg.x = detection.rect.x + detection.rect.width / 2;
-                        target_msg.y = detection.rect.y + detection.rect.height / 2;
+                        target_msg.x = detection.box.x + detection.box.width / 2;
+                        target_msg.y = detection.box.y + detection.box.height / 2;
                         RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
                         msg.targets.push_back(target_msg);
                             //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
@@ -269,7 +261,7 @@ private:
             
             bool running = true;
             std::chrono::steady_clock::time_point fps_start_time = std::chrono::steady_clock::now();
-            auto start_time = std::chrono::high_resolution_clock::now();
+            auto start_time = std::chrono::steady_clock::now();
             int fps_frame_count = 0;
             float fps_value = 0.0f;
             int frame_count = 0;
@@ -304,21 +296,21 @@ private:
                     for (const auto& detection : detections)
                     {
                         // 绘制检测框
-                        cv::rectangle(frame, detection.rect, cv::Scalar(0, 255, 0), 2);
+                        cv::rectangle(frame, detection.box, cv::Scalar(0, 255, 0), 2);
                         
                         // 绘制标签
                         std::string label = detection.className + ": " + std::to_string(detection.confidence);
                         int baseline = 0;
                         cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.9, 2, &baseline);
-                        cv::Point text_pos(detection.rect.x, std::max(0, detection.rect.y - text_size.height - 10));
+                        cv::Point text_pos(detection.box.x, std::max(0, detection.box.y - text_size.height - 10));
                         cv::putText(frame, label, text_pos, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
 
                         // 填充消息
                         tutorial_interfaces::msg::Target target_msg;
                         target_msg.confidence = detection.confidence;
                         target_msg.class_name = detection.className;
-                        target_msg.x = detection.rect.x + detection.rect.width / 2;
-                        target_msg.y = detection.rect.y + detection.rect.height / 2;
+                        target_msg.x = detection.box.x + detection.box.width / 2;
+                        target_msg.y = detection.box.y + detection.box.height / 2;
                         
                         RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", 
                                 target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
@@ -362,7 +354,7 @@ private:
                 // 每30帧输出一次统计信息
                 if (frame_count % 30 == 0) 
                 {
-                    auto current_time = std::chrono::high_resolution_clock::now();
+                    auto current_time = std::chrono::steady_clock::now();
                     std::chrono::duration<double> elapsed = current_time - start_time;
                     double fps_calculated = frame_count / elapsed.count();  // 计算FPS
                     std::cout << "Processed Frames: " << fps_value << " | FPS: " << fps_calculated << std::endl;
