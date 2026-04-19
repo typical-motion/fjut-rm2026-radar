@@ -34,10 +34,7 @@
 #include "tutorial_interfaces/msg/detection.hpp"
 #include "tutorial_interfaces/msg/target.hpp"
 
-using namespace std;
-using namespace cv;
 using namespace std::chrono;
-using namespace byte_track;
 using json = nlohmann::json;
 
 struct detection_info
@@ -95,7 +92,7 @@ public:
 
 
         publisher_detection = this->create_publisher<tutorial_interfaces::msg::Detection>("light_detection_topic", 10);
-        timer_ = this->create_wall_timer(20ms, std::bind(&inference_node::timerCallback, this));
+        timer_ = this->create_wall_timer(20ms, std::bind(&laser_inference_node::timerCallback, this));
         cv::namedWindow("Detection", cv::WINDOW_NORMAL);
 
         RCLCPP_INFO(this->get_logger(), "laser_inference_node initialized");
