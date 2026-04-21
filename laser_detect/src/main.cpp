@@ -92,6 +92,25 @@ public:
 
 private:
 
+    void calculateMotorAngles(float target_u, float target_v, float& pitch, float& yaw) 
+    {
+        // 计算目标点相对于图像中心的偏移(像素)
+        float delta_u = target_u - image_center_x;
+        float delta_v = target_v - image_center_y;
+        
+        // 计算角度(弧度)
+        float yaw_rad = atan2(delta_u, camera_focal_length_x);
+        float pitch_rad = atan2(delta_v, camera_focal_length_y);
+        
+        // 转换为角度
+        yaw = yaw_rad * (180.0f / M_PI) + camera_yaw_offset;
+        pitch = pitch_rad * (180.0f / M_PI) + camera_pitch_offset;
+        
+        // 限制角度范围(根据实际电机范围调整)
+        yaw = std::max(-90.0f, std::min(90.0f, yaw));
+        pitch = std::max(-45.0f, std::min(45.0f, pitch));
+    }
+
 
     void timerCallback()
     {
@@ -156,13 +175,34 @@ private:
                         cv::Point text_pos(detection.box.x, std::max(0, detection.box.y - text_size.height - 10));
                         cv::putText(frame, label, text_pos, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
 
+                        float target_u = detection.box.x + detection.box.width / 2;
+                        float target_v = detection.box.y + detection.box.height / 2;
+                        // 计算目标点相对于图像中心的偏移(像素)
+                        float delta_u = target_u - image_center_x;
+                        float delta_v = target_v - image_center_y;
+                        
+                        // 计算角度(弧度)
+                        float yaw_rad = atan2(delta_u, camera_focal_length_x);
+                        float pitch_rad = atan2(delta_v, camera_focal_length_y);
+                        
+                        // 转换为角度
+                        yaw = yaw_rad * (180.0f / M_PI) + camera_yaw_offset;
+                        pitch = pitch_rad * (180.0f / M_PI) + camera_pitch_offset;
+                        
+                        // 限制角度范围(根据实际电机范围调整)
+                        yaw = std::max(-90.0f, std::min(90.0f, yaw));
+                        pitch = std::max(-45.0f, std::min(45.0f, pitch));
+
                         tutorial_interfaces::msg::Target target_msg;
-                        target_msg.confidence = detection.confidence;
-                        target_msg.class_name = detection.className;
-                        target_msg.x = detection.box.x + detection.box.width / 2;
-                        target_msg.y = detection.box.y + detection.box.height / 2;
-                        RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
+                        // target_msg.confidence = detection.confidence;
+                        // target_msg.class_name = detection.className;
+                        // target_msg.x = detection.box.x + detection.box.width / 2;
+                        // target_msg.y = detection.box.y + detection.box.height / 2;
+                        // RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
+                        target_msg.yaw = yaw;
+                        target_msg.pitch = pitch;
                         msg.targets.push_back(target_msg);
+                        RCLCPP_INFO(this->get_logger(), "yaw: %f, pitch: %f", yaw, pitch);
                             //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
                     }
 
@@ -382,6 +422,11 @@ private:
 
     }
 
+    // 计算pitch和yaw角度的函数
+    
+
+
+
 
     // members
     bool runOnGPU_;
@@ -396,6 +441,13 @@ private:
     std::string save_path = "/home/zqz/ros2_ws/output.avi";
     std::vector<cv::Mat> stl_video;
     int fourcc_code;
+
+    const float camera_focal_length_x = 500.0f;  // 相机x方向焦距(像素)
+    const float camera_focal_length_y = 500.0f;  // 相机y方向焦距(像素)
+    const float image_center_x = 640.0f;         // 图像中心x坐标
+    const float image_center_y = 360.0f;         // 图像中心y坐标
+    const float camera_pitch_offset = 0.0f;     // 相机pitch安装角度偏移(度)
+    const float camera_yaw_offset = 0.0f;        // 相机yaw安装角度偏移(度)
 };
 
 int main(int argc, char** argv)
