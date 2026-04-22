@@ -21,7 +21,8 @@
 #include <opencv2/highgui.hpp>
 #include <chrono>
 
-#include "laser_detect.hpp"    // TensorRT-based inference wrapper (your class)
+#include "laser_detect.hpp" 
+#include "kalman_filter.hpp"   // TensorRT-based inference wrapper (your class)
 #include "HikCamera.h"
 #include "config.h"
 
@@ -58,7 +59,7 @@ static std::vector<Detection> inferencethrow_trt(Inference_trt& inf_light_trt, c
 class laser_inference_node : public rclcpp::Node
 {
 public:
-    laser_inference_node():Node("laser_inference_node"),runOnGPU_(true)
+    laser_inference_node():Node("laser_inference_node"),runOnGPU_(true),angle_filter(20, 30.0f)
     {
         Config cfg;
         hik_config.sn = cfg.hik_cfg.sn;
@@ -67,6 +68,12 @@ public:
         hik_config.frame_rate = cfg.hik_cfg.frame_rate;
         hik_config.rotate_180 = cfg.hik_cfg.rotate_180;
         hik_config.log_level = cfg.hik_cfg.log_level;
+
+        // 在构造函数中添加
+        //angle_filter = TargetAngleFilter(20, 30.0f);  // 最小框大小20像素，异常值阈值30度
+        //angle_filter.setKalmanParams(0.01f, 4.0f, 0.01f, 4.0f);  // 设置卡尔曼滤波参数
+        angle_filter.setKalmanParams(0.01f, 4.0f, 0.01f, 4.0f);
+
         //相机参数
         // classes for car model
         std::vector<std::string> classes_all{"light"};
@@ -86,7 +93,19 @@ public:
         publisher_detection = this->create_publisher<tutorial_interfaces::msg::Detection>("light_detection_topic", 10);
         timer_ = this->create_wall_timer(20ms, std::bind(&laser_inference_node::timerCallback, this));
         cv::namedWindow("Detection", cv::WINDOW_NORMAL);
-
+        RCLCPP_INFO(this->get_logger(), "==================================================");
+        RCLCPP_INFO(this->get_logger(), " ####   ###    ####  #   #   ###    ####");
+        RCLCPP_INFO(this->get_logger(), "#      #   #  #      ## ##  #   #  # ");
+        RCLCPP_INFO(this->get_logger(), "#      #   #   ###   # # #  #   #   ### ");
+        RCLCPP_INFO(this->get_logger(), "#      #   #      #  #   #  #   #      #");
+        RCLCPP_INFO(this->get_logger(), " ####   ###   ####   #   #   ###   #### ");
+        RCLCPP_INFO(this->get_logger(), "==================================================");
+        RCLCPP_INFO(this->get_logger(), "####     #    ####     #    ####");
+        RCLCPP_INFO(this->get_logger(), "#   #   # #   #   #   # #   #   #");
+        RCLCPP_INFO(this->get_logger(), "####   #####  #   #  #####  ####");
+        RCLCPP_INFO(this->get_logger(), "#  #   #   #  #   #  #   #  #  #");
+        RCLCPP_INFO(this->get_logger(), "#   #  #   #  ####   #   #  #   #");
+        RCLCPP_INFO(this->get_logger(), "==================================================");
         RCLCPP_INFO(this->get_logger(), "laser_inference_node initialized");
     }
 
@@ -114,6 +133,7 @@ private:
 
     void timerCallback()
     {
+        
         std::cout << "模式选择(test/hik):" << std::endl;
         std::string mode;
         std::cin >> mode;
@@ -136,6 +156,9 @@ private:
             std::chrono::steady_clock::time_point fps_start_time = std::chrono::steady_clock::now();
             int fps_frame_count = 0;
             float fps_value = 0.0f;
+
+            angle_filter.reset();
+
             while (running)
             {
                 cv::Mat frame_rgb = hik_camera.getLatestFrame();//海康录取到的通道和实际通道存在问题，直接使用opencv修改，其实可以直接改驱动（目前直接堆一个vector存frame
@@ -175,35 +198,56 @@ private:
                         cv::Point text_pos(detection.box.x, std::max(0, detection.box.y - text_size.height - 10));
                         cv::putText(frame, label, text_pos, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
 
-                        float target_u = detection.box.x + detection.box.width / 2;
-                        float target_v = detection.box.y + detection.box.height / 2;
-                        // 计算目标点相对于图像中心的偏移(像素)
-                        float delta_u = target_u - image_center_x;
-                        float delta_v = target_v - image_center_y;
-                        
-                        // 计算角度(弧度)
-                        float yaw_rad = atan2(delta_u, camera_focal_length_x);
-                        float pitch_rad = atan2(delta_v, camera_focal_length_y);
-                        
-                        // 转换为角度
-                        yaw = yaw_rad * (180.0f / M_PI) + camera_yaw_offset;
-                        pitch = pitch_rad * (180.0f / M_PI) + camera_pitch_offset;
-                        
-                        // 限制角度范围(根据实际电机范围调整)
-                        yaw = std::max(-90.0f, std::min(90.0f, yaw));
-                        pitch = std::max(-45.0f, std::min(45.0f, pitch));
+                        float yaw_filtered, pitch_filtered;
 
-                        tutorial_interfaces::msg::Target target_msg;
-                        // target_msg.confidence = detection.confidence;
-                        // target_msg.class_name = detection.className;
-                        // target_msg.x = detection.box.x + detection.box.width / 2;
-                        // target_msg.y = detection.box.y + detection.box.height / 2;
-                        // RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
-                        target_msg.yaw = yaw;
-                        target_msg.pitch = pitch;
-                        msg.targets.push_back(target_msg);
-                        RCLCPP_INFO(this->get_logger(), "yaw: %f, pitch: %f", yaw, pitch);
-                            //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
+                        bool detection_valid = angle_filter.processDetection
+                        (
+                            detection.box.x,
+                            detection.box.y,
+                            detection.box.width,
+                            detection.box.height,
+                            camera_focal_length_x,
+                            camera_focal_length_y,
+                            image_center_x,
+                            image_center_y,
+                            yaw_filtered,
+                            pitch_filtered
+                        );
+
+
+
+                        // float target_u = detection.box.x + detection.box.width / 2;
+                        // float target_v = detection.box.y + detection.box.height / 2;
+                        // // 计算目标点相对于图像中心的偏移(像素)
+                        // float delta_u = target_u - image_center_x;
+                        // float delta_v = target_v - image_center_y;
+                        
+                        // // 计算角度(弧度)
+                        // float yaw_rad = atan2(delta_u, camera_focal_length_x);
+                        // float pitch_rad = atan2(delta_v, camera_focal_length_y);
+                        
+                        // // 转换为角度
+                        // yaw = yaw_rad * (180.0f / M_PI) + camera_yaw_offset;
+                        // pitch = pitch_rad * (180.0f / M_PI) + camera_pitch_offset;
+                        
+                        // // 限制角度范围(根据实际电机范围调整)
+                        // yaw = std::max(-90.0f, std::min(90.0f, yaw));
+                        // pitch = std::max(-45.0f, std::min(45.0f, pitch));
+
+                        if (detection_valid)    
+                        {
+                            tutorial_interfaces::msg::Target target_msg;
+                            // target_msg.confidence = detection.confidence;
+                            // target_msg.class_name = detection.className;
+                            // target_msg.x = detection.box.x + detection.box.width / 2;
+                            // target_msg.y = detection.box.y + detection.box.height / 2;
+                            // RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
+                            target_msg.yaw = yaw_filtered + camera_yaw_offset;
+                            target_msg.pitch = pitch_filtered + camera_pitch_offset;
+                            msg.targets.push_back(target_msg);
+                            RCLCPP_INFO(this->get_logger(), "yaw: %f, pitch: %f", target_msg.yaw, target_msg.pitch);
+                                //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
+                        }
                     }
 
                     publisher_detection->publish(msg);
@@ -448,6 +492,11 @@ private:
     const float image_center_y = 360.0f;         // 图像中心y坐标
     const float camera_pitch_offset = 0.0f;     // 相机pitch安装角度偏移(度)
     const float camera_yaw_offset = 0.0f;        // 相机yaw安装角度偏移(度)
+
+    //Kalman
+    TargetAngleFilter angle_filter;
+
+
 };
 
 int main(int argc, char** argv)

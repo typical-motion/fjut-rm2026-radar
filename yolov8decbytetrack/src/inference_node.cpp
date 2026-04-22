@@ -94,7 +94,7 @@ static std::vector<Detection> inferencethrow_trt(Inference_trt& inf_car, cv::Mat
 static std::vector<Detection> inferencethrow_onnx(Inference& inf_car, cv::Mat& frame)
 {
     return inf_car.runInference(frame);
-} // opencv dnn 推理 trt用不了被选
+} // opencv dnn 推理 trt用不了备选
 
 // Convert detections -> byte_track::Object vector
 static std::vector<byte_track::Object> detectionsToObjects(const std::vector<Detection>& dets)
@@ -150,6 +150,19 @@ public:
         publisher_detection = this->create_publisher<tutorial_interfaces::msg::Detection>("detection_topic", 10);
         timer_ = this->create_wall_timer(20ms, std::bind(&inference_node::timerCallback, this));
         cv::namedWindow("Detection", cv::WINDOW_NORMAL);
+        RCLCPP_INFO(this->get_logger(), "==================================================");
+        RCLCPP_INFO(this->get_logger(), " ####   ###    ####  #   #   ###    ####");
+        RCLCPP_INFO(this->get_logger(), "#      #   #  #      ## ##  #   #  # ");
+        RCLCPP_INFO(this->get_logger(), "#      #   #   ###   # # #  #   #   ### ");
+        RCLCPP_INFO(this->get_logger(), "#      #   #      #  #   #  #   #      #");
+        RCLCPP_INFO(this->get_logger(), " ####   ###   ####   #   #   ###   #### ");
+        RCLCPP_INFO(this->get_logger(), "==================================================");
+        RCLCPP_INFO(this->get_logger(), "####     #    ####     #    ####");
+        RCLCPP_INFO(this->get_logger(), "#   #   # #   #   #   # #   #   #");
+        RCLCPP_INFO(this->get_logger(), "####   #####  #   #  #####  ####");
+        RCLCPP_INFO(this->get_logger(), "#  #   #   #  #   #  #   #  #  #");
+        RCLCPP_INFO(this->get_logger(), "#   #  #   #  ####   #   #  #   #");
+        RCLCPP_INFO(this->get_logger(), "==================================================");
 
         RCLCPP_INFO(this->get_logger(), "inference_node initialized");
     }
