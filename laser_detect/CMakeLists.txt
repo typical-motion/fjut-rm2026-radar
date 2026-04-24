@@ -66,6 +66,7 @@ link_directories(${HIK_LIB_DIR})
 set(SOURCES
     src/main.cpp
     src/laser_detect.cpp
+    src/dnn_detect.cpp
     src/HikCamera.cpp
 )
 
