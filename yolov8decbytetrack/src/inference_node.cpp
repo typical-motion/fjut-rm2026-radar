@@ -133,43 +133,48 @@ public:
         std::vector<std::string> classes_blue{"B1", "B2", "B3", "B4", "B5", "B7"};
         //检测目标
         // TensorRT engine paths (adjust to your environment)
-        std::string car_engine = "/home/zqz/ros2_ws/model2/best8.engine";
+        std::string car_engine = "/home/zqz/ros2_ws/model2/car-v11.engine";
         //std::string car_onnx = "/home/zqz/ros2_ws/model2/car.onnx";
+
+        std::string armor_engine = "/home/zqz/ros2_ws/model2/armor-v3.engine";
         inf_car_trt = std::make_unique<Inference_trt>(car_engine, cv::Size(640,640), classes_all, runOnGPU_);
+        inf_armor_trt = std::make_unique<Inference_trt>(armor_engine, cv::Size(640,640), classes_armor, runOnGPU_);
+
         
-        Inference inf_armor("/home/zqz/ros2_ws/model2/armor.onnx", cv::Size(640, 640), classes_armor, runOnGPU_);
-        inf_armor_ = std::make_unique<Inference>(inf_armor);
+        //Inference inf_armor("/home/zqz/ros2_ws/model2/armor-v3.onnx", cv::Size(640, 640), classes_armor, runOnGPU_);
+        //inf_armor_ = std::make_unique<Inference>(inf_armor);
         // create TensorRT inference instance for car detection
         
         //Inference inf_car(car_onnx, cv::Size(640,640), classes_all, runOnGPU_);
         //inf_car_onnx = std::make_unique<Inference>(inf_car);
         inf_car_trt->setModelConfidenceThreshold(0.25f);
         inf_car_trt->setLetterBoxForSquare(true);
+        
 
 
         publisher_detection = this->create_publisher<tutorial_interfaces::msg::Detection>("detection_topic", 10);
         timer_ = this->create_wall_timer(20ms, std::bind(&inference_node::timerCallback, this));
         cv::namedWindow("Detection", cv::WINDOW_NORMAL);
-        RCLCPP_INFO(this->get_logger(), "==================================================");
-        RCLCPP_INFO(this->get_logger(), " ####   ###    ####  #   #   ###    ####");
-        RCLCPP_INFO(this->get_logger(), "#      #   #  #      ## ##  #   #  # ");
-        RCLCPP_INFO(this->get_logger(), "#      #   #   ###   # # #  #   #   ### ");
-        RCLCPP_INFO(this->get_logger(), "#      #   #      #  #   #  #   #      #");
-        RCLCPP_INFO(this->get_logger(), " ####   ###   ####   #   #   ###   #### ");
-        RCLCPP_INFO(this->get_logger(), "==================================================");
-        RCLCPP_INFO(this->get_logger(), "####     #    ####     #    ####");
-        RCLCPP_INFO(this->get_logger(), "#   #   # #   #   #   # #   #   #");
-        RCLCPP_INFO(this->get_logger(), "####   #####  #   #  #####  ####");
-        RCLCPP_INFO(this->get_logger(), "#  #   #   #  #   #  #   #  #  #");
-        RCLCPP_INFO(this->get_logger(), "#   #  #   #  ####   #   #  #   #");
-        RCLCPP_INFO(this->get_logger(), "==================================================");
+        std::cout << "==================================================" << std::endl;
+        std::cout << " ####   ###    ####  #   #   ###    ####" << std::endl;
+        std::cout << "#      #   #  #      ## ##  #   #  # " << std::endl;
+        std::cout << "#      #   #   ###   # # #  #   #   ### " << std::endl;
+        std::cout << "#      #   #      #  #   #  #   #      #" << std::endl;
+        std::cout << " ####   ###   ####   #   #   ###   #### " << std::endl;
+        std::cout << "==================================================" << std::endl;
+        std::cout << "####     #    ####     #    ####" << std::endl;
+        std::cout << "#   #   # #   #   #   # #   #   #" << std::endl;
+        std::cout << "####   #####  #   #  #####  ####" << std::endl;
+        std::cout << "#  #   #   #  #   #  #   #  #  #" << std::endl;
+        std::cout << "#   #  #   #  ####   #   #  #   #" << std::endl;
+        std::cout << "==================================================" << std::endl;
 
         RCLCPP_INFO(this->get_logger(), "inference_node initialized");
     }
 
 private:
     // Process tracked results: draw boxes + labels on frame and fill msg
-    std::tuple<std::vector<Detection>,std::vector<cv::Point2f>> processAndPublishTracks(const std::vector<std::shared_ptr<STrack>>& tracks, cv::Mat& frame, Inference& inf_armor)
+    std::tuple<std::vector<Detection>,std::vector<cv::Point2f>> processAndPublishTracks(const std::vector<std::shared_ptr<STrack>>& tracks, cv::Mat& frame, Inference_trt& inf_armor_trt)
 {
     // 创建ROS消息对象
     auto msg = tutorial_interfaces::msg::Detection();
@@ -218,7 +223,7 @@ private:
                 // 提取车辆ROI区域
                 cv::Mat roi(frame, box);
                 // 在ROI区域运行装甲板检测推理
-                std::vector<Detection> output_armor = inf_armor.runInference(roi);
+                std::vector<Detection> output_armor = inf_armor_trt.runInference_TensorRT(roi);
                 // 移除重复的检测结果
                 remove_same_obj(output_armor);
                 
@@ -238,6 +243,7 @@ private:
                     {
                         // 绘制装甲板检测框
                         cv::rectangle(roi, box_armor, armor_color, 2);
+                        std::cout << box_armor << std::endl;
 
                         // 准备装甲板类别和置信度文本
                         std::string classString_armor = detection_armor.className + ' ' + 
@@ -344,7 +350,7 @@ private:
 
 
                 // draw and publish
-                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_);
+                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
                 std::vector<Detection> result_detections_armor = std::get<0>(result);
                 std::vector<cv::Point2f> result_points = std::get<1>(result);
                 std::vector<std::string> classes_name;
@@ -449,7 +455,7 @@ private:
             //cap_.open("/home/zqz/ros2_ws/image/test2.mp4");
             if (!cap_.isOpened())
             {
-                RCLCPP_ERROR(this->get_logger(), "Failed to open video");
+                RCLCPP_ERROR(this->get_logger(), "Failed to open video");2
                 return;
             }
             RCLCPP_INFO(this->get_logger(), "Video opened");
@@ -462,7 +468,7 @@ private:
             while (running)
             {
                 cap_ >> frame;
-                //cv::Mat frame = cv::imread("/home/zqz/fjut_radar/image/test_image.jpg");
+                //cv::Mat frame = cv::imread("/home/zqz/ros2_ws/image/test_image.jpg");
                 if (frame.empty())
                 {
                     running = false;
@@ -487,7 +493,7 @@ private:
 
 
                 // draw and publish
-                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_);
+                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
                 std::vector<Detection> result_detections_armor = std::get<0>(result);
                 std::vector<cv::Point2f> result_points = std::get<1>(result);
                 std::vector<std::string> classes_name;
@@ -557,8 +563,9 @@ private:
     std::vector<std::string> classes_car_;
     std::vector<std::string> classes_armor_;
     std::unique_ptr<Inference_trt> inf_car_trt;
+    std::unique_ptr<Inference_trt> inf_armor_trt;
     //std::unique_ptr<Inference> inf_car_onnx;
-    std::unique_ptr<Inference> inf_armor_;
+    //std::unique_ptr<Inference> inf_armor_;
     BYTETracker tracker_;
     cv::VideoCapture cap_;
     rclcpp::Publisher<tutorial_interfaces::msg::Detection>::SharedPtr publisher_detection;

@@ -141,6 +141,9 @@ class Inference_trt
 public:
     Inference_trt(const std::string &enginePath, const cv::Size &modelInputShape = {640, 640},
                   const std::vector<std::string> &classes_ = {}, const bool &runWithCuda = true);
+    Inference_trt(const std::string &onnxModelPath, const std::string &engineSavePath,
+                  const cv::Size &modelInputShape, const std::vector<std::string> &classes_,
+                  const bool &runWithCuda = true, bool fp16 = true, size_t workspace = 1 << 30);
     void setclasses(std::vector<std::string> &newclasses)
     {
         this->classes = newclasses;
@@ -149,9 +152,11 @@ public:
     std::vector<Detection> runInference(const cv::Mat &input);
     std::vector<Detection> runInference_TensorRT(const cv::Mat &input);
     void loadTensorRTEngine(const std::string &enginePath);
+    bool buildEngineFromONNX(const std::string &onnxPath, const std::string &engineSavePath);
     void setModelConfidenceThreshold(float val) { modelConfidenceThreshold = val; }
     void setLetterBoxForSquare(bool val) { letterBoxForSquare = val; }
-    //void setTensoRTOptions(bool fp16 = true, bool useINT8 = false, size_t workspaceSize = 1 << 30);
+    void setTensoRTOptions(bool fp16 = true, size_t workspaceSize = 1 << 30);
+    void setYOLOv5Format(bool val) { yolov5Format = val; }
 
 private:
     std::shared_ptr<nvinfer1::IRuntime> runtime;
@@ -177,6 +182,7 @@ private:
     std::string modelPath{};
     std::string classesPath{};
     std::string enginePath{};
+    std::string onnxPath_{};
     bool cudaEnabled{};
     //bool TRTEnabled{false};
     bool useTensorRT{};
@@ -216,6 +222,7 @@ private:
     bool useFP16{true};
     bool useINT8{false};
     size_t workspaceSize{1 << 30};
+    bool yolov5Format{false};
 
     cv::dnn::Net net;
 };
