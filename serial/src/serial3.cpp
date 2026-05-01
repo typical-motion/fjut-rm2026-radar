@@ -14,12 +14,9 @@
 #include <algorithm> // for std::find
 #include <mutex>     // for std::mutex
 #include <tuple>     // for std::tuple
-#include <typeinfo>  // for typeid
-#include <sstream>
+
 #include "serial.hpp"
 
-using namespace std;
-using namespace serial;
 
 // 全局变量定义（与 header 中 extern 对应）
 int double_vulnerability_chance = -1; //双倍易伤机会次数
@@ -27,7 +24,7 @@ int opponent_double_vulnerability = -1; // 是否正在触发双倍易伤
 int chances_flag = 1; // 双倍易伤触发标志位，需要从1递增，每小局比赛会重置，所以每局比赛要重启程序
 std::vector<int> progress_list; //标记进度列表
 
-map<std::string,int> mark_value =
+std::map<std::string,int> mark_value =
 {
     {"B1",0},
     {"B2",0},
@@ -38,7 +35,7 @@ map<std::string,int> mark_value =
 };
 
 //机器人名字对应ID
-map<std::string,int> mapping_table =
+std::map<std::string,int> mapping_table =
 {
     {"R1", 1},
     {"R2", 2},
@@ -208,6 +205,7 @@ SerialPort::receive_packet(const std::vector<uint8_t>& data, const std::vector<u
 
     // 计算 CRC16：frame_header + cmd_id + data_field
     std::vector<uint8_t> crc16_input;
+    crc16_input.reserve(frame_header.size() + cmd_id_bytes.size() + data_field.size());
     crc16_input.insert(crc16_input.end(), frame_header.begin(), frame_header.end());
     crc16_input.insert(crc16_input.end(), cmd_id_bytes.begin(), cmd_id_bytes.end());
     crc16_input.insert(crc16_input.end(), data_field.begin(), data_field.end());
@@ -245,9 +243,10 @@ void SerialPort::append_uint16_le(std::vector<uint8_t>& data, uint16_t value)
 std::vector<uint8_t> SerialPort::build_data_radar_all(const std::unordered_map<std::string, std::pair<float,float>>& send_map, char color)
 {
     std::vector<uint8_t> data;
+    data.reserve(24); // 6 robots * 2 coords * 2 bytes
     if (color == 'R')
     {
-        const char* keys[] = {"B1", "B2", "B3", "B4", "B5", "B7"};
+        static const std::string keys[] = {"B1", "B2", "B3", "B4", "B5", "B7"};
         for (const auto& key : keys)
         {
             auto it = send_map.find(key);
@@ -258,7 +257,7 @@ std::vector<uint8_t> SerialPort::build_data_radar_all(const std::unordered_map<s
     }
     else
     {
-        const char* keys[] = {"R1", "R2", "R3", "R4", "R5", "R7"};
+        static const std::string keys[] = {"R1", "R2", "R3", "R4", "R5", "R7"};
         for (const auto& key : keys)
         {
             auto it = send_map.find(key);
@@ -274,6 +273,7 @@ std::pair<std::vector<uint8_t>, uint8_t> SerialPort::build_send_packet(const std
 {
     uint16_t data_length = static_cast<uint16_t>(data.size());
     std::vector<uint8_t> frame_header;
+    frame_header.reserve(5);
     frame_header.push_back(0xA5);
 
     append_uint16_le(frame_header, data_length);
@@ -286,6 +286,7 @@ std::pair<std::vector<uint8_t>, uint8_t> SerialPort::build_send_packet(const std
     std::vector<uint8_t> cmd_id_le = {cmd_id[1], cmd_id[0]};
 
     std::vector<uint8_t> packet(frame_header);
+    packet.reserve(frame_header.size() + 2 + data.size() + 2);
     packet.insert(packet.end(), cmd_id_le.begin(), cmd_id_le.end());
     packet.insert(packet.end(), data.begin(), data.end());
 
@@ -296,9 +297,10 @@ std::pair<std::vector<uint8_t>, uint8_t> SerialPort::build_send_packet(const std
     return {packet, next_seq};
 }
 
-std::vector<uint8_t> SerialPort::build_data_decision(uint8_t chances, char &color)
+std::vector<uint8_t> SerialPort::build_data_decision(uint8_t chances, char color)
 {
     std::vector<uint8_t> data;
+    data.reserve(7);
     data.push_back(0x21);
     data.push_back(0x01);
 
@@ -364,7 +366,7 @@ void SerialManager::receive_serial()
 
     std::cout << "[receive_serial] 开始接收数据..." << std::endl;
 
-    while (true)
+    while (running_)
     {
         try
         {
@@ -427,6 +429,7 @@ void SerialManager::receive_serial()
                 {
                     uint8_t b = std::get<1>(vulnerability_result)[0];
                     auto res = radar_decision(b);
+                    std::lock_guard<std::mutex> lock(mutex_);
                     double_vulnerability_chance = res.double_vulnerability_chance;
                     opponent_double_vulnerability = res.opponent_double_vulnerability;
                 }
@@ -481,8 +484,8 @@ void SerialManager::send_serial(const std::unordered_map<std::string, std::pair<
         seq_ = next_seq;
         if (ser.isOpen())
         {
-            //size_t bytes_written = ser.write(packet);
-            std::cout << "[send_serial] 数据包写入: " << packet.size() << " bytes" << std::endl;
+            size_t bytes_written = ser.write(packet);
+            std::cout << "[send_serial] 数据包写入: " << bytes_written << " bytes" << std::endl;
         }
         else
         {
@@ -518,6 +521,7 @@ void SerialManager::send_serial(const std::unordered_map<std::string, std::pair<
 
 void SerialManager::stop()
 {
+    running_ = false;
     try
     {
         if (ser.isOpen()) ser.close();
@@ -532,11 +536,13 @@ void SerialManager::stop()
 std::vector<uint8_t> SerialManager::serial_read_all()
 {
     std::vector<uint8_t> out;
+    
     try
     {
         if (!ser.isOpen()) return out;
         size_t avail = ser.available();
         if (avail == 0) return out;
+        out.reserve(avail);
         std::string s = ser.read(avail);
         out.assign(s.begin(), s.end());
     }
@@ -547,4 +553,3 @@ std::vector<uint8_t> SerialManager::serial_read_all()
     return out;
 }
 
-// EOF
