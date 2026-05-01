@@ -25,116 +25,6 @@ Inference_trt::Inference_trt(const std::string &enginePath,const cv::Size &model
     //cudaStreamCreate(&stream);
 }
 
-Inference_trt::Inference_trt(const std::string &onnxModelPath, const std::string &engineSavePath,
-                             const cv::Size &modelInputShape, const std::vector<std::string> &classes_,
-                             const bool &runWithCuda, bool fp16, size_t workspace)
-{
-    modelShape = modelInputShape;
-    classes = classes_;
-    cudaEnabled = runWithCuda;
-    useFP16 = fp16;
-    workspaceSize = workspace;
-    onnxPath_ = onnxModelPath;
-
-    if (!buildEngineFromONNX(onnxModelPath, engineSavePath))
-    {
-        throw std::runtime_error("Failed to build TensorRT engine from ONNX model");
-    }
-    loadTensorRTEngine(engineSavePath);
-}
-
-void Inference_trt::setTensoRTOptions(bool fp16, size_t workspaceSize)
-{
-    useFP16 = fp16;
-    this->workspaceSize = workspaceSize;
-}
-
-bool Inference_trt::buildEngineFromONNX(const std::string &onnxPath, const std::string &engineSavePath)
-{
-    std::cout << "Building TensorRT engine from ONNX: " << onnxPath << std::endl;
-
-    auto builder = std::unique_ptr<nvinfer1::IBuilder>(nvinfer1::createInferBuilder(gLogger));
-    if (!builder)
-    {
-        std::cerr << "Failed to create TensorRT builder" << std::endl;
-        return false;
-    }
-
-    const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-    auto network = std::unique_ptr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicitBatch));
-    if (!network)
-    {
-        std::cerr << "Failed to create network definition" << std::endl;
-        return false;
-    }
-
-    auto parser = std::unique_ptr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, gLogger));
-    if (!parser)
-    {
-        std::cerr << "Failed to create ONNX parser" << std::endl;
-        return false;
-    }
-
-    if (!parser->parseFromFile(onnxPath.c_str(), static_cast<int32_t>(nvinfer1::ILogger::Severity::kWARNING)))
-    {
-        std::cerr << "Failed to parse ONNX model" << std::endl;
-        return false;
-    }
-
-    auto config = std::unique_ptr<nvinfer1::IBuilderConfig>(builder->createBuilderConfig());
-    if (!config)
-    {
-        std::cerr << "Failed to create builder config" << std::endl;
-        return false;
-    }
-
-    config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, workspaceSize);
-
-    if (useFP16)
-    {
-        if (builder->platformHasFastFp16())
-        {
-            config->setFlag(nvinfer1::BuilderFlag::kFP16);
-            std::cout << "FP16 mode enabled" << std::endl;
-        }
-        else
-        {
-            std::cout << "FP16 not supported on this platform, falling back to FP32" << std::endl;
-        }
-    }
-
-    if (useINT8)
-    {
-        config->setFlag(nvinfer1::BuilderFlag::kINT8);
-        std::cout << "INT8 mode enabled" << std::endl;
-    }
-
-    std::cout << "Building serialized network... (this may take a while)" <<std::endl;
-    auto serializedEngine = std::unique_ptr<nvinfer1::IHostMemory>(
-        builder->buildSerializedNetwork(*network, *config));
-
-    if (!serializedEngine)
-    {
-        std::cerr << "Failed to build serialized engine" << std::endl;
-        return false;
-    }
-
-    std::ofstream engineFile(engineSavePath, std::ios::binary);
-    if (!engineFile.good())
-    {
-        std::cerr << "Failed to open engine save path: " << engineSavePath << std::endl;
-        return false;
-    }
-
-    engineFile.write(static_cast<const char*>(serializedEngine->data()), serializedEngine->size());
-    engineFile.close();
-
-    std::cout << "TensorRT engine saved to: " << engineSavePath << std::endl;
-    std::cout << "Engine size: " << serializedEngine->size() / (1024 * 1024) << " MB" << std::endl;
-
-    return true;
-}
-
 
 
 inline float sigmoid(float x)
@@ -142,76 +32,112 @@ inline float sigmoid(float x)
     return 1.0f / (1.0f + std::exp(-x));
 }
 
-void nms_(std::vector<Detection>& detections, float iouThreshold)
+void nms_(std::vector<Detection>& detections,float iouThreshold)
 {
-    const size_t n = detections.size();
-    if (n <= 1) return;
+    auto t_post_start = std::chrono::high_resolution_clock::now();
 
-    // 按置信度降序排序
-    std::sort(detections.begin(), detections.end(),
-              [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
+    std::sort(detections.begin(), detections.end(),[](const Detection& a, const Detection& b) {return a.confidence > b.confidence;});//置信度排序
+    //std::cout << "detections size before nms: " << detections.size() << std::endl;
+    
+    std::vector<bool> keep(detections.size(), true);
 
-    // 预计算所有框的坐标和面积（一次性提取，避免内层循环重复计算 cv::Rect 成员访问）
-    std::vector<int> x1(n), y1(n), x2(n), y2(n), area(n);
-    for (size_t i = 0; i < n; ++i) {
-        const cv::Rect& b = detections[i].box;
-        x1[i] = b.x;
-        y1[i] = b.y;
-        x2[i] = b.x + b.width;
-        y2[i] = b.y + b.height;
-        area[i] = b.width * b.height;
+    for (size_t i = 0; i < detections.size(); i++)
+    {
+        if (!keep[i]) continue;
+        const cv::Rect& box_i = detections[i].box;
+        for (size_t j = i + 1; j < detections.size(); j++)
+        {
+            if (!keep[j]) continue;
+            const cv::Rect& box_j = detections[j].box;
+            float interArea = (box_i & box_j).area();
+            float unionArea = box_i.area() + box_j.area() - interArea;
+            float iou = interArea / unionArea;
+            if (iou > iouThreshold) keep[j] = false;
+        }
+    }
+    auto t_post_end = std::chrono::high_resolution_clock::now();
+    std::vector<Detection> nmsDetections;
+    for (size_t i = 0; i< detections.size(); i++)
+    {
+        if (keep[i]) nmsDetections.push_back(detections[i]);
+    }
+    detections = std::move(nmsDetections);
+    double post_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_post_end - t_post_start).count();
+    //std::cout << std::fixed << std::setprecision(2)
+    //            << " post:" << post_ms
+    //            << std::endl;
+
+}
+
+void fast_nms(std::vector<Detection>& detections,float iouThreshold)
+{
+    if (detections.empty())
+    {
+        return;
     }
 
-    std::vector<uint8_t> keep(n, 1);
+    std::sort(detections.begin(), detections.end(), [](const Detection& a, const Detection& b)
+    {
+        return a.confidence > b.confidence;
+    });
 
-    for (size_t i = 0; i < n; ++i) {
-        if (!keep[i]) continue;
+    const size_t n = detections.size();
+    std::vector<bool> suppressed(n, false);
 
-        const int xi1 = x1[i], yi1 = y1[i], xi2 = x2[i], yi2 = y2[i];
-        const int area_i = area[i];
+    std::vector<float> areas(n);
+    for (size_t i = 0; i < n; ++i) 
+    {
+        areas[i] = static_cast<float>(detections[i].box.area());
+    }
 
-        for (size_t j = i + 1; j < n; ++j) {
-            if (!keep[j]) continue;
-
-            int inter_x1 = xi1 > x1[j] ? xi1 : x1[j];
-            int inter_y1 = yi1 > y1[j] ? yi1 : y1[j];
-            int inter_x2 = xi2 < x2[j] ? xi2 : x2[j];
-            int inter_y2 = yi2 < y2[j] ? yi2 : y2[j];
-
-            int inter_w = inter_x2 - inter_x1;
-            if (inter_w <= 0) continue;
-            int inter_h = inter_y2 - inter_y1;
-            if (inter_h <= 0) continue;
-
-            int inter_area = inter_w * inter_h;
-            int union_area = area_i + area[j] - inter_area;
-
-            // 用乘法代替除法: inter/union > thr  ⟺  inter > thr * union
-            if (static_cast<float>(inter_area) > iouThreshold * static_cast<float>(union_area)) {
-                keep[j] = 0;
+    for (size_t i = 0; i < n; ++i) 
+    {
+        if (suppressed[i]) continue;
+        
+        const cv::Rect& box_i = detections[i].box;
+        
+        // 内层循环优化：提前计算交集区域
+        for (size_t j = i + 1; j < n; ++j) 
+        {
+            if (suppressed[j]) continue;
+            
+            const cv::Rect& box_j = detections[j].box;
+            
+            // 计算交集区域
+            int inter_x1 = std::max(box_i.x, box_j.x);
+            int inter_y1 = std::max(box_i.y, box_j.y);
+            int inter_x2 = std::min(box_i.x + box_i.width, box_j.x + box_j.width);
+            int inter_y2 = std::min(box_i.y + box_i.height, box_j.y + box_j.height);
+            
+            // 如果没有交集，跳过
+            if (inter_x2 <= inter_x1 || inter_y2 <= inter_y1) {
+                continue;
+            }
+            
+            // 计算交集面积
+            float inter_area = static_cast<float>((inter_x2 - inter_x1) * (inter_y2 - inter_y1));
+            
+            // 计算并集面积
+            float union_area = areas[i] + areas[j] - inter_area;
+            
+            // 计算IoU
+            float iou = inter_area / union_area;
+            
+            // 如果IoU超过阈值，抑制该框
+            if (iou > iouThreshold) 
+            {
+                suppressed[j] = true;
             }
         }
     }
-
-    // 原地压缩保留的检测结果（单次遍历）
-    size_t w = 0;
-    for (size_t i = 0; i < n; ++i) {
-        if (keep[i]) {
-            if (w != i) detections[w] = std::move(detections[i]);
-            ++w;
-        }
-    }
-    detections.resize(w);
 }
 
-void fast_nms(std::vector<Detection>& detections, float iouThreshold)
-{
-    nms_(detections, iouThreshold);
-}
-
-void adaptive_nms(std::vector<Detection>& detections, float baseIouThreshold, const cv::Size& modelShape) {
+void adaptive_nms(std::vector<Detection>& detections, float baseIouThreshold) {
+    // 根据检测框密度自适应调整IoU阈值
     float density = static_cast<float>(detections.size()) / (modelShape.width * modelShape.height);
     float adaptiveThreshold = baseIouThreshold * (1.0f + density * 10.0f);
+    
+    // 使用调整后的阈值执行NMS
     nms_(detections, adaptiveThreshold);
 }
 
@@ -618,13 +544,17 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
             //std::cout << "DEBUG layout: pred-major [1,N,5], elem_per_pred=5, num_preds=" << num_preds << std::endl;
         }
         else {
-            // 通用判定：较小维度为特征数(elem_per_pred)，较大维度为预测数(num_preds)
-            // [1, C, N] field-major 且 C < N  → elem=C, num=N, field_major=true
-            // [1, N, C] pred-major  且 N > C  → elem=C, num=N, field_major=false
+            // 原有的通用判定：如果一个维度明显大于另一个，按字段/预测顺序判断
             if (d1 >= 5 && d2 >= 5) {
-                elem_per_pred = std::min(d1, d2);
-                num_preds      = std::max(d1, d2);
-                is_field_major = (d1 < d2);  // d1<d2 即 [1, C, N] field-major
+                if (d1 > d2) {
+                    elem_per_pred = d1;
+                    num_preds = d2;
+                    is_field_major = true;
+                } else {
+                    elem_per_pred = d2;
+                    num_preds = d1;
+                    is_field_major = false;
+                }
             } else {
                 // 退回原先的保守猜测（尽量不颠倒 5 与 N）
                 elem_per_pred = std::max(d1, d2);
@@ -637,13 +567,10 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
     }
     else if (outputDims.nbDims == 2)
     {
-        int d0 = outputDims.d[0];
-        int d1 = outputDims.d[1];
-        // 较小维度为特征数，较大维度为预测数
-        elem_per_pred = std::min(d0, d1);
-        num_preds     = std::max(d0, d1);
-        is_field_major = (d0 < d1); // [C, N] field-major if d0<d1
-        //std::cout << "DEBUG layout: 2D, elem_per_pred=" << elem_per_pred << ", num_preds=" << num_preds << std::endl;
+        num_preds = outputDims.d[0];
+        elem_per_pred = outputDims.d[1];
+        is_field_major = false; // layout: [N, elem_per_pred]
+        //std::cout << "DEBUG layout: pred-major [N, elem_per_pred], elem_per_pred=" << elem_per_pred << ", num_preds=" << num_preds << std::endl;
     }
     else 
     {
@@ -681,45 +608,14 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
     //std::vector<Detection> detections;
     detections.reserve(std::min(num_preds, 4096));
     const int INPUT_SIZE = modelShape.width; // assume square input
-    for (int i = 0; i < num_preds; i++)
+    //const int INPUT_SIZE = 640;
+    const int strides[3] = {8, 16, 32};
+    const int grids[3]   = {80, 40, 20};
+    for (int i = 0; i <num_preds; i++)
     {
-        int best_class = 0;
-        float best_score = 0.0f;
-
-        if (yolov5Format)
-        {
-            // YOLOv5: [cx,cy,w,h, obj, cls_0..cls_N]  4 bbox + 1 obj + N classes = elem_per_pred
-            float obj_conf = sigmoid(get_output(i, 4));
-            if (obj_conf < modelConfidenceThreshold) continue;
-
-            int num_classes = elem_per_pred - 5;
-            float best_cls = 1.0f;
-            if (num_classes > 0) {
-                best_cls = 0.0f;
-                for (int c = 0; c < num_classes; ++c) {
-                    float cls_prob = sigmoid(get_output(i, 5 + c));
-                    if (c == 0 || cls_prob > best_cls) {
-                        best_cls = cls_prob;
-                        best_class = c;
-                    }
-                }
-            }
-            best_score = obj_conf * best_cls;
-            if (best_score < modelScoreThreshold) continue;
-        }
-        else
-        {
-            // YOLOv11: [cx,cy,w,h, cls_0..cls_N]  4 bbox + N classes = elem_per_pred（无独立 objectness）
-            int num_classes = elem_per_pred - 4;
-            for (int c = 0; c < num_classes; ++c) {
-                float score = sigmoid(get_output(i, 4 + c));
-                if (c == 0 || score > best_score) {
-                    best_score = score;
-                    best_class = c;
-                }
-            }
-            if (best_score < modelScoreThreshold) continue;
-        }
+        float raw_obj = get_output(i, 4);
+        float conf_obj = sigmoid(raw_obj);
+        if (conf_obj < modelScoreThreshold) continue;
 
         float cx = get_output(i, 0);
         float cy = get_output(i, 1);
@@ -734,10 +630,40 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
             h  *= INPUT_SIZE;
         }
 
+        //float conf = output[4 * num_preds + i];
+        //if (conf < modelScoreThreshold) continue;
+        //float best_score = sigmoid(conf);
+        //float cx = output[0 * num_preds + i];
+        //float cy = output[1 * num_preds + i];
+        //float w  = output[2 * num_preds + i];
+        //float h  = output[3 * num_preds + i];
+
         float x1 = cx - w * 0.5f;
         float y1 = cy - h * 0.5f;
         float x2 = cx + w * 0.5f;
         float y2 = cy + h * 0.5f;
+
+        // handle category logits if present (elem_per_pred > 5)
+        int best_class = 0;
+        float best_class_score = 0.0f;
+        if (elem_per_pred > 5)
+        {
+            int num_classes = elem_per_pred - 5;
+            // find argmax among class logits
+            for (int c = 0; c < num_classes; ++c)
+            {
+                float cls_raw = get_output(i, 5 + c);
+                float cls_prob = sigmoid(cls_raw);
+                if (c == 0 || cls_prob > best_class_score)
+                {
+                    best_class_score = cls_prob;
+                    best_class = c;
+                }
+            }
+            // combine objectness and class prob (optional) - here we use product
+            float combined_conf = conf_obj * best_class_score;
+            if (combined_conf < modelScoreThreshold) continue;
+        }
 
         // de-letterbox
         x1 = (x1 - pad_x) / scale;
@@ -749,26 +675,26 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
         y1 = std::clamp(y1, 0.f, static_cast<float>(input.rows - 1));
         x2 = std::clamp(x2, 0.f, static_cast<float>(input.cols - 1));
         y2 = std::clamp(y2, 0.f, static_cast<float>(input.rows - 1));
-
+        //int best_class = 0;
         Detection det;
         det.box = cv::Rect(static_cast<int>(std::round(x1)),
                            static_cast<int>(std::round(y1)),
                            static_cast<int>(std::round(x2 - x1)),
                            static_cast<int>(std::round(y2 - y1)));
-        det.confidence = best_score;
-
+        det.confidence = conf_obj;
+        
         if (!classes.empty())
         {
-            if (best_class >=0 && best_class < static_cast<int>(classes.size()))
+            if (best_class >=0 && best_class <static_cast<int>(classes.size()))
             {
                 det.className = classes[best_class];
             }
-            else
+            else 
             {
                 det.className = classes[0];
             }
         }
-        else
+        else 
         {
             det.className = (best_class >=0) ? ("class_" + std::to_string(best_class)) : "unknown";
         }
