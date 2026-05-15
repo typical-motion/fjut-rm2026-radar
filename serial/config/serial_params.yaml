@@ -1,0 +1,17 @@
+# ============================================================
+# 串口节点配置文件
+# 使用方式: ros2 run serial_node serial_node --ros-args --params-file config/serial_params.yaml
+# ============================================================
+serial_node:
+  ros__parameters:
+    # 串口设备路径
+    port: "/dev/ttyUSB0"
+
+    # 波特率
+    baudrate: 115200
+
+    # 队伍颜色: "R" 红方 / "B" 蓝方
+    color: "R"
+
+    # 调试模式: true 开启 / false 关闭
+    debug: false

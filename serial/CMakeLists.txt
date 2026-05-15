@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(serial_node)
+project("serial_node")
 set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -17,7 +17,7 @@ find_package(Threads REQUIRED)
 #find_package(serial REQUIRED)
 
 include_directories(/usr/local/include)
-link_directories(/usr/local/lib)
+link_directories(/usr/local/lib/serial)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,6 +46,11 @@ target_link_libraries(serial_node
 
 install(TARGETS serial_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# 安装 YAML 配置文件
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 ament_package()
