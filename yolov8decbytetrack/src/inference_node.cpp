@@ -2,6 +2,15 @@
 // Simplified inference_node: only uses TensorRT inference for "car" detection and tracking.
 // Armor-related code removed.
 
+
+// 上电插主控
+// 查传感器端高度，运算端长宽高
+// 去安全杂项那边走个流程
+// 上电接官方主控连服务器，检录激光和断gimbal后激光关闭
+// 最后再上电插主控
+// 预检录还要查小电脑，主机等是不是开源操作系统
+
+
 #include <iostream>
 #include <opencv4/opencv2/core/types.hpp>
 #include <vector>
@@ -26,6 +35,7 @@
 #include "BYTETracker.h"
 #include "HikCamera.h"
 #include "config.h"
+#include <yaml-cpp/yaml.h>
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -133,12 +143,18 @@ public:
         std::vector<std::string> classes_blue{"B1", "B2", "B3", "B4", "B5", "B7"};
         //检测目标
         // TensorRT engine paths (adjust to your environment)
-        std::string car_engine = "/home/zqz/ros2_ws/model2/car-v11.engine";
+
+        YAML::Node config = YAML::LoadFile("/home/zqz/ros2_ws/yaml/config.yaml");
+
+        //std::string car_engine = "/home/zqz/ros2_ws/model2/car-v11.engine";
+        std::string car_engine = config["car_model_engine_path"].as<std::string>();
+        std::string armor_engine = config["armor_model_engine_path"].as<std::string>();
         //std::string car_onnx = "/home/zqz/ros2_ws/model2/car.onnx";
-        std::string armor_engine = "/home/zqz/ros2_ws/model2/armor-v3.engine";
+        //std::string armor_engine = "/home/zqz/ros2_ws/model2/armor-v11-fp16-640.engine";
+        //std::string armor_onnx = "/home/zqz/ros2_ws/model2/armor.onnx";
         inf_car_trt = std::make_unique<Inference_trt>(car_engine, cv::Size(640,640), classes_all, runOnGPU_);
-        
-        inf_armor_trt = std::make_unique<Inference_trt>(armor_engine, cv::Size(640,640), classes_armor, runOnGPU_);
+        //inf_armor_onnx = std::make_unique<Inference>(armor_onnx, cv::Size(640,640), classes_armor, runOnGPU_);
+        inf_armor_trt = std::make_unique<Inference_trt>(armor_engine, cv::Size(1920,1920), classes_armor, runOnGPU_);
         //inf_armor_ = std::make_unique<Inference>(inf_armor);
         // create TensorRT inference instance for car detection
         
@@ -146,9 +162,13 @@ public:
         //inf_car_onnx = std::make_unique<Inference>(inf_car);
         inf_car_trt->setModelConfidenceThreshold(0.25f);
         inf_car_trt->setLetterBoxForSquare(true);
+        
+        //inf_armor_trt->setYolov5Format(false);
 
-        inf_armor_trt->setModelConfidenceThreshold(0.50f);
-        inf_armor_trt->setLetterBoxForSquare(true);
+         inf_armor_trt->setModelConfidenceThreshold(0.25f);
+         inf_armor_trt->setLetterBoxForSquare(true);
+
+        //inf_armor_trt->getModelConfidenceThreshold();
 
 
         publisher_detection = this->create_publisher<tutorial_interfaces::msg::Detection>("detection_topic", 10);
@@ -174,6 +194,7 @@ public:
 private:
     // Process tracked results: draw boxes + labels on frame and fill msg
     std::tuple<std::vector<Detection>,std::vector<cv::Point2f>> processAndPublishTracks(const std::vector<std::shared_ptr<STrack>>& tracks, cv::Mat& frame, Inference_trt& inf_armor_trt)
+    //std::tuple<std::vector<Detection>,std::vector<cv::Point2f>> processAndPublishTracks(const std::vector<std::shared_ptr<STrack>>& tracks, cv::Mat& frame, Inference& inf_armor_onnx)
 {
     // 创建ROS消息对象
     auto msg = tutorial_interfaces::msg::Detection();
@@ -223,6 +244,7 @@ private:
                 cv::Mat roi(frame, box);
                 // 在ROI区域运行装甲板检测推理
                 std::vector<Detection> output_armor = inf_armor_trt.runInference_TensorRT(roi);
+                //std::vector<Detection> output_armor = inf_armor_onnx.runInference(roi);
                 // 移除重复的检测结果
                 remove_same_obj(output_armor);
                 
@@ -349,6 +371,7 @@ private:
 
                 // draw and publish
                 std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
+                //std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_onnx);
                 std::vector<Detection> result_detections_armor = std::get<0>(result);
                 std::vector<cv::Point2f> result_points = std::get<1>(result);
                 std::vector<std::string> classes_name;
@@ -466,7 +489,7 @@ private:
             while (running)
             {
                 cap_ >> frame;
-                //cv::Mat frame = cv::imread("/home/zqz/fjut_radar/image/test_image.jpg");
+                //cv::Mat frame = cv::imread("/home/zqz/ros2_ws/image/test_image.jpg");
                 if (frame.empty())
                 {
                     running = false;
@@ -492,6 +515,7 @@ private:
 
                 // draw and publish
                 std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
+                //std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_onnx);
                 std::vector<Detection> result_detections_armor = std::get<0>(result);
                 std::vector<cv::Point2f> result_points = std::get<1>(result);
                 std::vector<std::string> classes_name;
@@ -562,6 +586,7 @@ private:
     std::vector<std::string> classes_armor_;
     std::unique_ptr<Inference_trt> inf_car_trt;
     std::unique_ptr<Inference_trt> inf_armor_trt;
+    //std::unique_ptr<Inference> inf_armor_onnx;
     //std::unique_ptr<Inference> inf_car_onnx;
     //std::unique_ptr<Inference> inf_armor_;
     BYTETracker tracker_;

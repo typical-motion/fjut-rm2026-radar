@@ -26,6 +26,7 @@
 #include <NvOnnxParser.h>
 #include <cuda_runtime_api.h>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 
 struct Detection
@@ -151,6 +152,9 @@ public:
     void loadTensorRTEngine(const std::string &enginePath);
     void setModelConfidenceThreshold(float val) { modelConfidenceThreshold = val; }
     void setLetterBoxForSquare(bool val) { letterBoxForSquare = val; }
+    void setYolov5Format(bool val) { yolov5Format = val; }
+    void getModelConfidenceThreshold() {float val = modelConfidenceThreshold; std::cout << "conf:" << val << std::endl;}
+    
     //void setTensoRTOptions(bool fp16 = true, bool useINT8 = false, size_t workspaceSize = 1 << 30);
 
 private:
@@ -197,6 +201,7 @@ private:
     float modelNMSThreshold        {0.50};
 
     bool letterBoxForSquare = true;
+    bool yolov5Format{false};
 
     //nvinfer1::ICudaEngine* trtEngine{nullptr};
     //nvinfer1::IExecutionContext* trtContext{nullptr};
@@ -208,9 +213,15 @@ private:
     int outputIndex{-1};
     size_t inputSize{0};
     size_t outputSize{0};
+    nvinfer1::DataType inputDataType{nvinfer1::DataType::kFLOAT};
+    nvinfer1::DataType outputDataType{nvinfer1::DataType::kFLOAT};
     int numClasses;
     std::string inputTensorName;
     std::string outputTensorName;
+    // 预分配host端缓冲区，避免每帧重复分配
+    std::vector<__half> hostInputHalf;
+    std::vector<__half> hostOutputHalf;
+    std::vector<float> hostOutputFloat;
     //TensorRTLogger trtLogger;
 
     bool useFP16{true};

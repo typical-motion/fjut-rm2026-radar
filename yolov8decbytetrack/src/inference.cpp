@@ -1,6 +1,7 @@
 // Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 #include "inference.h"
+#include <cuda_fp16.h>
 #include <opencv4/opencv2/core/types.hpp>
 
 Inference::Inference(const std::string &onnxModelPath, const cv::Size &modelInputShape, const std::vector<std::string> &classes_, const bool &runWithCuda)
@@ -24,6 +25,7 @@ Inference_trt::Inference_trt(const std::string &enginePath,const cv::Size &model
     loadTensorRTEngine(enginePath);
     //cudaStreamCreate(&stream);
 }
+
 
 // Inference_trt::Inference_trt(const std::string &onnxModelPath, const std::string &engineSavePath,
 //                              const cv::Size &modelInputShape, const std::vector<std::string> &classes_,
@@ -469,12 +471,21 @@ void Inference_trt::loadTensorRTEngine(const std::string &enginePath)//初始化
         }
     }
     // 获取数据类型
-    nvinfer1::DataType inputDataType = trtEngine->getTensorDataType(inputTensorName.c_str());
-    nvinfer1::DataType outputDataType = trtEngine->getTensorDataType(outputTensorName.c_str());
-    
+    inputDataType = trtEngine->getTensorDataType(inputTensorName.c_str());
+    outputDataType = trtEngine->getTensorDataType(outputTensorName.c_str());
+
     // 计算缓冲区大小
     inputSize = getSizeByDims(inputDims) * getElementSize(inputDataType);
     outputSize = getSizeByDims(outputDims) * getElementSize(outputDataType);
+
+    // 预分配host端缓冲区
+    if (inputDataType == nvinfer1::DataType::kHALF) {
+        hostInputHalf.resize(inputSize / sizeof(__half));
+    }
+    if (outputDataType == nvinfer1::DataType::kHALF) {
+        hostOutputHalf.resize(outputSize / sizeof(__half));
+    }
+    hostOutputFloat.resize(outputSize / getElementSize(outputDataType));
     
     // 分配设备内存
     cudaMalloc(&deviceBuffers[inputIndex], inputSize);
@@ -486,10 +497,10 @@ void Inference_trt::loadTensorRTEngine(const std::string &enginePath)//初始化
     trtContext->setInputTensorAddress(inputTensorName.c_str(), deviceBuffers[inputIndex]);
     trtContext->setOutputTensorAddress(outputTensorName.c_str(), deviceBuffers[outputIndex]);
     
-    //std::cout << "TensorRT engine loaded successfully" << std::endl;
-    //std::cout << "" << std::endl;
-    //std::cout << "Input tensor: " << inputTensorName << ", size: " << inputSize << " bytes" << std::endl;
-    //std::cout << "Output tensor: " << outputTensorName << ", size: " << outputSize << " bytes" << std::endl;
+    std::cout << "TensorRT engine loaded successfully" << std::endl;
+    std::cout << "" << std::endl;
+    std::cout << "Input tensor: " << inputTensorName << ", size: " << inputSize << " bytes" << std::endl;
+    std::cout << "Output tensor: " << outputTensorName << ", size: " << outputSize << " bytes" << std::endl;
     cudaStreamCreate(&cudaStream);
 
 }
@@ -523,27 +534,28 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
     auto t_pre_start = std::chrono::high_resolution_clock::now();
     cv::Mat inputBlob;
     cv::dnn::blobFromImage(modelInput, inputBlob, 1.0f/255.0f, modelShape, cv::Scalar(), true, false);
-    size_t blob_bytes = inputBlob.total() * inputBlob.elemSize();
 
-    if (blob_bytes > inputSize)
-    {
-        std::cerr << "Warning: input blob size (" << blob_bytes << ") > expected inputSize (" << inputSize << "). Using min size to copy.\n";
-    }
-
-    size_t copy_bytes = std::min(blob_bytes, inputSize);
     auto t_pre_end = std::chrono::high_resolution_clock::now();
 
-    std::vector<float> inputData(inputSize / sizeof(float), 0.0f);
-    memcpy(inputData.data(), inputBlob.data, copy_bytes);
-
-    // --- H2D (measure) ---
+    // --- H2D ---
     auto t_h2d_start = std::chrono::high_resolution_clock::now();
 
-    cudaError_t err_mem1 = cudaMemcpyAsync(deviceBuffers[inputIndex], inputData.data(), inputSize, cudaMemcpyHostToDevice, cudaStream);
-    if(err_mem1 != cudaSuccess)
-    {
-        std::cerr << "cudamem failed" << cudaGetErrorString(err_mem1) << std::endl;
-        throw std::runtime_error("cudamem failed");
+    if (inputDataType == nvinfer1::DataType::kHALF) {
+        // 将 4D blob 展平为 1D，用 OpenCV convertTo 做硬件加速的 FP32→FP16
+        cv::Mat blobFlat(1, static_cast<int>(inputBlob.total()), CV_32F, inputBlob.data);
+        cv::Mat outHalf(1, static_cast<int>(hostInputHalf.size()), CV_16FC1, hostInputHalf.data());
+        blobFlat.convertTo(outHalf, CV_16F);
+        cudaError_t err = cudaMemcpyAsync(deviceBuffers[inputIndex], hostInputHalf.data(), inputSize, cudaMemcpyHostToDevice, cudaStream);
+        if(err != cudaSuccess) {
+            std::cerr << "cudamem failed" << cudaGetErrorString(err) << std::endl;
+            throw std::runtime_error("cudamem failed");
+        }
+    } else {
+        cudaError_t err = cudaMemcpyAsync(deviceBuffers[inputIndex], inputBlob.data, inputSize, cudaMemcpyHostToDevice, cudaStream);
+        if(err != cudaSuccess) {
+            std::cerr << "cudamem failed" << cudaGetErrorString(err) << std::endl;
+            throw std::runtime_error("cudamem failed");
+        }
     }
 
     auto t_h2d_end = std::chrono::high_resolution_clock::now();
@@ -553,13 +565,6 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
 
     if (!trtContext->enqueueV3(cudaStream)) {
         throw std::runtime_error("Failed to execute inference");
-    }
-    
-    cudaError_t err_stream = cudaStreamSynchronize(cudaStream);
-    if (err_stream != cudaSuccess)
-    {
-        std::cerr << "cudastream failed" << cudaGetErrorString(err_stream) << std::endl;
-        throw std::runtime_error("cudastream failed");
     }
 
     auto t_inf_end = std::chrono::high_resolution_clock::now();
@@ -616,7 +621,7 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
             num_preds = d1;
             is_field_major = false; // layout: [1,N,5]
             //std::cout << "DEBUG layout: pred-major [1,N,5], elem_per_pred=5, num_preds=" << num_preds << std::endl;
-        }
+        }//car特用
         else {
             // 通用判定：较小维度为特征数(elem_per_pred)，较大维度为预测数(num_preds)
             // [1, C, N] field-major 且 C < N  → elem=C, num=N, field_major=true
@@ -672,7 +677,7 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
         {
             return outputData[field_idx * num_preds + pred_idx];
         }
-        else 
+        else
         {
             return outputData[pred_idx * elem_per_pred + field_idx];
         }
@@ -685,7 +690,6 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
     {
         int best_class = 0;
         float best_score = 0.0f;
-        bool yolov5Format = false;
         if (yolov5Format)
         {
             // YOLOv5: [cx,cy,w,h, obj, cls_0..cls_N]  4 bbox + 1 obj + N classes = elem_per_pred
@@ -713,6 +717,7 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
             int num_classes = elem_per_pred - 4;
             for (int c = 0; c < num_classes; ++c) {
                 float score = sigmoid(get_output(i, 4 + c));
+                //std::cout << score << std::endl;
                 if (c == 0 || score > best_score) {
                     best_score = score;
                     best_class = c;
@@ -721,7 +726,7 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
             if (best_score < modelScoreThreshold) continue;
         }
 
-        float cx = get_output(i, 0);
+        float cx = get_output(i, 0);//类比二维组合先x后y顺序在上面
         float cy = get_output(i, 1);
         float w  = get_output(i, 2);
         float h  = get_output(i, 3);
@@ -755,6 +760,7 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
                            static_cast<int>(std::round(y1)),
                            static_cast<int>(std::round(x2 - x1)),
                            static_cast<int>(std::round(y2 - y1)));
+        //std::cout << det.box << std::endl;
         det.confidence = best_score;
 
         if (!classes.empty())
@@ -762,39 +768,45 @@ std::vector<Detection> Inference_trt::runInference_TensorRT(const cv::Mat &input
             if (best_class >=0 && best_class < static_cast<int>(classes.size()))
             {
                 det.className = classes[best_class];
+                //std::cout << det.className << std::endl;
             }
             else
             {
                 det.className = classes[0];
+                //std::cout << det.className << std::endl;
             }
         }
         else
         {
             det.className = (best_class >=0) ? ("class_" + std::to_string(best_class)) : "unknown";
+            //std::cout << det.className << std::endl;
         }
 
         detections.push_back(det);
     }
-    
     nms_(detections,modelNMSThreshold);
     auto t_post_end = std::chrono::high_resolution_clock::now();
 
-    // --- 计时输出 ---
-    double pre_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_pre_end - t_pre_start).count();
-    double h2d_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_h2d_end - t_h2d_start).count();
-    double inf_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_inf_end - t_inf_start).count();
-    double d2h_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_d2h_end - t_d2h_start).count();
-    double post_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_post_end - t_post_start).count();
-    double total_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_post_end - t_start).count();
 
-    std::cout << std::fixed << std::setprecision(2)
-              << "Timing (ms): pre=" << pre_ms
-              << " h2d=" << h2d_ms // cpu->gpu
-              << " infer=" << inf_ms // 推理
-              << " d2h=" << d2h_ms // gpu->cput
-              << " post=" << post_ms // 后处理（先前测试中耗时最长的部分）
-              << " total=" << total_ms // 总时长
-              << std::endl;
+
+    // --- 计时输出 ---
+    //void time_logger(const std::chrono::steady_clock::time_point& t_pre_end,const std::chrono::steady_clock::time_point& t_pre_start, const std::chrono::steady_clock::time_point& t_h2d_end, const std::chrono::steady_clock::time_point& t_h2d_start, const std::chrono::steady_clock::time_point& t_inf_end, const std::chrono::steady_clock::time_point& t_inf_start, const std::chrono::steady_clock::time_point& t_d2h_end, const std::chrono::steady_clock::time_point& t_d2h_start, const std::chrono::steady_clock::time_point& t_post_end, const std::chrono::steady_clock::time_point& t_post_start, const std::chrono::steady_clock::time_point& t_start);
+
+    //  double pre_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_pre_end - t_pre_start).count();
+    //  double h2d_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_h2d_end - t_h2d_start).count();
+    //  double inf_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_inf_end - t_inf_start).count();
+    //  double d2h_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_d2h_end - t_d2h_start).count();
+    //  double post_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_post_end - t_post_start).count();
+    //  double total_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t_post_end - t_start).count();
+
+    //  std::cout << std::fixed << std::setprecision(2)
+    //            << "Timing (ms): pre=" << pre_ms
+    //            << " h2d=" << h2d_ms // cpu->gpu
+    //            << " infer=" << inf_ms // 推理
+    //            << " d2h=" << d2h_ms // gpu->cput
+    //            << " post=" << post_ms // 后处理（先前测试中耗时最长的部分）
+    //            << " total=" << total_ms // 总时长
+    //            << std::endl;
 
 
     //size_t total_elems = outputSize / sizeof(float);
@@ -821,15 +833,16 @@ void Inference::loadClassesFromFile()
 void Inference::loadOnnxNetwork()
 {
     net = cv::dnn::readNetFromONNX(modelPath);
-    if (cudaEnabled)
+    if (cudaEnabled && cv::cuda::getCudaEnabledDeviceCount() > 0)
     {
-        //std::cout << "\nRunning on CUDA" << std::endl;
         net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
         net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA_FP16);
     }
     else
     {
-        //std::cout << "\nRunning on CPU" << std::endl;
+        if (cudaEnabled) {
+            std::cout << "CUDA DNN not available, falling back to CPU" << std::endl;
+        }
         net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
         net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
     }

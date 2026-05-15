@@ -47,6 +47,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(tutorial_interfaces REQUIRED)  
 find_package(Eigen3 3.3 REQUIRED)
 find_package(OpenCV 4.13 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # ===================== 全局包含路径 =====================
 # 显式添加全局包含，确保编译器在任何地方都能搜到海康头文件
@@ -97,6 +98,7 @@ target_link_libraries(inference_node
     cudart
     stdc++fs
     MvCameraControl  # 简写，CMake会根据link_directories找到它
+    yaml-cpp#::yaml-cpp
 )
 
 # ===================== ROS 2 依赖 =====================
