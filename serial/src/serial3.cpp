@@ -8,7 +8,7 @@
 #include <map>
 #include <string>
 #include <vector>
-#include <cstdint>
+#include <cmath>      // for std::lround
 #include <unordered_map>
 
 #include <algorithm> // for std::find
@@ -16,6 +16,7 @@
 #include <tuple>     // for std::tuple
 #include <sstream>   // for std::istringstream
 #include <iomanip>   // for std::setw, std::setfill
+#include <fstream>   // for std::ofstream (JSON log)
 
 #include "serial.hpp"
 
@@ -34,6 +35,78 @@ int game_progress = 0;
 int stage_remain_time = 0;
 uint64_t sync_timestamp = 0;
 
+// JSON 日志记录辅助函数
+static std::string bytes_to_hex(const std::vector<uint8_t>& data)
+{
+    std::ostringstream oss;
+    for (size_t i = 0; i < data.size(); ++i)
+    {
+        if (i > 0) oss << " ";
+        oss << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<int>(data[i]);
+    }
+    oss << std::dec;
+    return oss.str();
+}
+
+// 从数据包字节中提取 cmd_id（小端，字节 5-6）
+static std::string extract_cmd_id_hex(const std::vector<uint8_t>& packet)
+{
+    if (packet.size() < 7) return "0000";
+    uint16_t cmd_id = static_cast<uint16_t>(packet[5]) | (static_cast<uint16_t>(packet[6]) << 8);
+    std::ostringstream oss;
+    oss << std::hex << std::setw(4) << std::setfill('0') << cmd_id;
+    return oss.str();
+}
+
+// 从数据包字节中提取 seq（字节 3）
+static int extract_seq(const std::vector<uint8_t>& packet)
+{
+    if (packet.size() < 5) return -1;
+    return static_cast<int>(packet[3]);
+}
+
+static void log_packet_json(const std::string& filename,
+                            const std::vector<uint8_t>& packet,
+                            const std::string& direction,
+                            const std::string& status = "ok")
+{
+    std::ofstream ofs(filename, std::ios::app);
+    if (!ofs.is_open())
+    {
+        std::cerr << "[log] 无法打开日志文件: " << filename << std::endl;
+        return;
+    }
+
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    ofs << "{\"ts\":" << ms
+        << ",\"dir\":\"" << direction << "\""
+        << ",\"cmd_id\":\"0x" << extract_cmd_id_hex(packet) << "\""
+        << ",\"seq\":" << extract_seq(packet)
+        << ",\"size\":" << packet.size()
+        << ",\"status\":\"" << status << "\""
+        << ",\"hex\":\"" << bytes_to_hex(packet) << "\"}\n";
+}
+
+// 记录非数据包事件（丢弃字节、错误等）
+static void log_event(const std::string& filename,
+                      const std::string& event,
+                      const std::string& detail = "")
+{
+    std::ofstream ofs(filename, std::ios::app);
+    if (!ofs.is_open()) return;
+
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    ofs << "{\"ts\":" << ms
+        << ",\"event\":\"" << event << "\"";
+    if (!detail.empty())
+        ofs << ",\"detail\":\"" << detail << "\"";
+    ofs << "}\n";
+}
 
 struct radar_ai
 {
@@ -432,11 +505,11 @@ void SerialPort::append_uint16_le(std::vector<uint8_t>& data, uint16_t value)
 
 std::vector<uint8_t> SerialPort::build_data_radar_all(const std::unordered_map<std::string, std::pair<float,float>>& send_map, char color)
 {
-    // 0x0305 协议: 对方(6台) + 己方(6台) = 12台 × 2坐标 × 2字节 = 48 字节
-    static const std::string enemy_keys_r[] = {"B1", "B2", "B3", "B4", "B5", "B7"}; // 红方视角: 对方=蓝
-    static const std::string our_keys_r[]   = {"R1", "R2", "R3", "R4", "R5", "R7"}; // 红方视角: 己方=红
-    static const std::string enemy_keys_b[] = {"R1", "R2", "R3", "R4", "R5", "R7"}; // 蓝方视角: 对方=红
-    static const std::string our_keys_b[]   = {"B1", "B2", "B3", "B4", "B5", "B7"}; // 蓝方视角: 己方=蓝
+    // 0x0305 协议: 对方(英雄,工程,3号步兵,4号步兵,6号空中,哨兵) + 己方(同) = 48 字节
+    static const std::string enemy_keys_r[] = {"B1", "B2", "B3", "B4", "B6", "B7"}; // 红方视角: 对方=蓝
+    static const std::string our_keys_r[]   = {"R1", "R2", "R3", "R4", "R6", "R7"}; // 红方视角: 己方=红
+    static const std::string enemy_keys_b[] = {"R1", "R2", "R3", "R4", "R6", "R7"}; // 蓝方视角: 对方=红
+    static const std::string our_keys_b[]   = {"B1", "B2", "B3", "B4", "B6", "B7"}; // 蓝方视角: 己方=蓝
 
     const std::string* enemy_keys = (color == 'R') ? enemy_keys_r : enemy_keys_b;
     const std::string* our_keys   = (color == 'R') ? our_keys_r   : our_keys_b;
@@ -447,8 +520,8 @@ std::vector<uint8_t> SerialPort::build_data_radar_all(const std::unordered_map<s
     auto write_coord = [&](const std::string& key, bool /*unused*/) {
         auto it = send_map.find(key);
         if (it == send_map.end()) { append_uint16_t_le(data, 0); append_uint16_t_le(data, 0); return; }
-        append_uint16_t_le(data, static_cast<uint16_t>(it->second.first));
-        append_uint16_t_le(data, static_cast<uint16_t>(it->second.second));
+        append_uint16_t_le(data, static_cast<uint16_t>(std::lround(it->second.first)));
+        append_uint16_t_le(data, static_cast<uint16_t>(std::lround(it->second.second)));
     };
 
     // 对方 6 台 (bytes 0-23)
@@ -578,6 +651,13 @@ void SerialManager::receive_serial()
                 if (sof_iter == buffer.end()) break;
                 size_t sof_index = std::distance(buffer.begin(), sof_iter);
 
+                // 记录 SOF 之前的丢弃字节
+                if (sof_index > 0)
+                {
+                    std::vector<uint8_t> dropped(buffer.begin(), buffer.begin() + sof_index);
+                    log_event("serial_rx_log.json", "dropped", bytes_to_hex(dropped));
+                }
+
                 // 需要至少 5 字节帧头
                 if (buffer.size() < sof_index + 5) break;
 
@@ -687,6 +767,13 @@ void SerialManager::receive_serial()
                     }
                 }
 
+                // 记录接收包到日志（含 CRC 校验状态）
+                {
+                    auto any_result = receive_any_packet(packet_data, false);
+                    std::string status = std::get<1>(any_result).empty() ? "crc_fail" : "ok";
+                    log_packet_json("serial_rx_log.json", packet_data, "rx", status);
+                }
+
                 // 从 buffer 中移除已处理的完整包（从包头 SOF 开始）
                 buffer.erase(buffer.begin(), buffer.begin() + sof_index + total_packet_len);
             }
@@ -712,10 +799,8 @@ void SerialManager::send_serial(const std::unordered_map<std::string, std::pair<
             {
                 const std::string& robot_id = kv.first;
                 const auto& pos = kv.second;
-                float x = pos.first * 100.0f;   // m -> cm
-                float y = pos.second * 100.0f;  // m -> cm
-                if (color_ == 'R')
-                    y = 1500.0f - y;
+                float x = pos.first;
+                float y = pos.second;
                 pos_cache_[robot_id] = {x, y};
             }
         }
@@ -750,6 +835,7 @@ void SerialManager::send_serial(const std::unordered_map<std::string, std::pair<
                 check_packet(packet);
             }
 
+            log_packet_json("serial_tx_log.json", packet, "tx");
             if (ser.isOpen())
             {
                 size_t bytes_written = ser.write(packet);
@@ -802,6 +888,7 @@ void SerialManager::send_serial_key(uint8_t /*id1*/, uint8_t id2, const std::str
         auto [packet, next_seq] = build_send_packet(data, {0x0A, 0x06}, seq_);
         seq_ = next_seq;
 
+        log_packet_json("serial_tx_log.json", packet, "tx");
         if (ser.isOpen())
         {
             size_t bytes_written = ser.write(packet);
@@ -892,6 +979,7 @@ void SerialManager::manual_debug_send()
         for (auto byte : packet) std::cout << std::hex << static_cast<int>(byte) << " ";
         std::cout << std::dec << std::endl;
 
+        log_packet_json("serial_tx_log.json", packet, "tx");
         size_t written = ser.write(packet);
         std::cout << "[手动发送] 已发送 " << written << " bytes" << std::endl;
     }
@@ -911,6 +999,7 @@ void SerialManager::manual_debug_send()
         for (auto byte : packet) std::cout << std::hex << static_cast<int>(byte) << " ";
         std::cout << std::dec << std::endl;
 
+        log_packet_json("serial_tx_log.json", packet, "tx");
         size_t written = ser.write(packet);
         std::cout << "[手动发送] 已发送 " << written << " bytes" << std::endl;
     }
@@ -948,6 +1037,7 @@ void SerialManager::manual_debug_send()
         for (auto byte : custom_packet) std::cout << std::hex << static_cast<int>(byte) << " ";
         std::cout << std::dec << std::endl;
 
+        log_packet_json("serial_tx_log.json", custom_packet, "tx");
         size_t written = ser.write(custom_packet);
         std::cout << "[手动发送] 已发送 " << written << " bytes" << std::endl;
     }

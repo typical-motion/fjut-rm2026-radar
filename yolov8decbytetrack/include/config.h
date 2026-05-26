@@ -28,7 +28,7 @@ public:
     struct HikConfig
     {
         std::string sn = "DA6214861";
-        float exposure = 40000.0f;
+        float exposure = 10000.0f;
         float gain = 15.0f;
         float frame_rate = 210.0f;
         bool rotate_180 = false;

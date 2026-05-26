@@ -35,15 +35,16 @@ class ui_design_node : public rclcpp::Node
 public:
     ui_design_node() : Node("ui_design_node")
     {
-        // 初始化参数 - 使用5m场地的地图
-        map_path = "/home/zqz/ros2_ws/image/map_5m.jpg";  // 使用5m场地地图
+        // 初始化参数 - 使用500cm场地的地图
+        map_path = "/home/zqz/ros2_ws/image/map_5m.jpg";  // 地图
         history_length = 20;  // 增加历史轨迹长度
         frame_count = 0;
-        field_size_ = 5.0f;  // 5m场地
+        field_width_cm_ = 2800.0f;   // 场地长边(红→蓝)
+        field_height_cm_ = 1500.0f;  // 场地短边
 
-        RCLCPP_INFO(this->get_logger(), "=== 5m场地定位测试节点启动 ===");
+        RCLCPP_INFO(this->get_logger(), "=== 2800x1500cm场地定位节点启动 ===");
         RCLCPP_INFO(this->get_logger(), "地图路径: %s", map_path.c_str());
-        RCLCPP_INFO(this->get_logger(), "场地大小: %.1f x %.1f m", field_size_, field_size_);
+        RCLCPP_INFO(this->get_logger(), "场地大小: %.1f x %.1f cm", field_width_cm_, field_height_cm_);
         RCLCPP_INFO(this->get_logger(), "历史轨迹长度: %d", history_length);
 
         // 初始化MapVisualizer
@@ -118,30 +119,30 @@ private:
                 {
                     std::string robot_id = target.class_name;
                     
-                    // 5m场地坐标处理 - 确保坐标在0-5范围内
-                    float x = std::max(0.0f, std::min(target.x, field_size_));
-                    float y = std::max(0.0f, std::min(target.y, field_size_));
+                    // 坐标合法性检查 (DJI地图坐标系, 单位:厘米)
+                    float x = std::max(0.0f, std::min(target.x, field_width_cm_));
+                    float y = std::max(0.0f, std::min(target.y, field_height_cm_));
                     
                     // 根据队伍分配颜色
                     if (std::find(red.begin(), red.end(), robot_id) != red.end())
                     {
                         vis_->addEnemy(robot_id, x, y);  // 红方作为敌人（红色）
-                        
-                        RCLCPP_INFO(this->get_logger(), "[敌方红] %s: (%.2f, %.2f)", 
+
+                        RCLCPP_INFO(this->get_logger(), "[敌方红] %s: (%.2f, %.2f)",
                                    robot_id.c_str(), x, y);
                     }
                     else if (std::find(blue.begin(), blue.end(), robot_id) != blue.end())
                     {
                         vis_->addFriendly(robot_id, x, y);  // 蓝方作为友方（蓝色）
-                        
-                        RCLCPP_INFO(this->get_logger(), "[友方蓝] %s: (%.2f, %.2f)", 
+
+                        RCLCPP_INFO(this->get_logger(), "[友方蓝] %s: (%.2f, %.2f)",
                                    robot_id.c_str(), x, y);
                     }
                     else
                     {
                         // 未知队伍默认作为中立单位（绿色）
                         vis_->addFriendly(robot_id, x, y);
-                        RCLCPP_INFO(this->get_logger(), "[中立] %s: (%.2f, %.2f)", 
+                        RCLCPP_INFO(this->get_logger(), "[中立] %s: (%.2f, %.2f)",
                                    robot_id.c_str(), x, y);
                     }
 
@@ -242,19 +243,19 @@ private:
         auto test_msg = std::make_shared<tutorial_interfaces::msg::Detection>();
         test_msg->header.stamp = this->get_clock()->now();
         
-        // 生成一些测试点，覆盖5m场地的关键位置
+        // 生成测试点，覆盖2800×1500cm场地的关键位置
         std::vector<std::tuple<std::string, float, float, std::string>> test_points = {
-            {"R1", 0.5f, 0.5f, "red"},     // 红方基地
-            {"B1", 4.5f, 4.5f, "blue"},    // 蓝方基地
-            {"R2", 2.5f, 2.5f, "red"},     // 场地中心
-            {"B2", 1.0f, 4.0f, "blue"},    // 左上区域
-            {"R3", 4.0f, 1.0f, "red"},     // 右下区域
-            {"R4", 1.5f, 3.5f, "red"},     // 随机点1
-            {"B4", 3.5f, 1.5f, "blue"},    // 随机点2
-            {"R5", 0.2f, 4.8f, "red"},     // 边界点1
-            {"B5", 4.8f, 0.2f, "blue"},    // 边界点2
-            {"R6", 2.0f, 3.0f, "red"},     // 中间区域
-            {"B6", 3.0f, 2.0f, "blue"}     // 中间区域
+            {"R1", 100.0f, 100.0f, "red"},       // 红方基地区域
+            {"B1", 2600.0f, 1300.0f, "blue"},     // 蓝方基地区域
+            {"R2", 1400.0f, 750.0f, "red"},       // 场地中心
+            {"B2", 500.0f, 1200.0f, "blue"},      // 中场区域
+            {"R3", 2200.0f, 300.0f, "red"},       // 前哨区域
+            {"R4", 800.0f, 1000.0f, "red"},       // 补给区
+            {"B4", 1800.0f, 800.0f, "blue"},      // 高地附近
+            {"R5", 50.0f, 1400.0f, "red"},        // 边界点
+            {"B5", 2700.0f, 100.0f, "blue"},      // 边界点
+            {"R6", 1000.0f, 700.0f, "red"},       // 中间区域
+            {"B6", 1600.0f, 700.0f, "blue"}       // 中间区域
         };
         
         for (const auto& [id, x, y, team] : test_points) {
@@ -266,14 +267,15 @@ private:
         }
         
         test_publisher_->publish(*test_msg);
-        RCLCPP_INFO(this->get_logger(), "发布测试数据，包含%zu个目标，覆盖5m场地各区域", test_msg->targets.size());
+        RCLCPP_INFO(this->get_logger(), "发布测试数据，包含%zu个目标，覆盖2800x1500cm场地各区域", test_msg->targets.size());
     }
 
     // 成员变量声明
     int frame_count;
     std::string map_path;
     int history_length;
-    float field_size_;  // 场地大小
+    float field_width_cm_;   // 场地长(cm)
+    float field_height_cm_;  // 场地宽(cm)
 
     // ROS2通信相关
     rclcpp::Subscription<tutorial_interfaces::msg::Detection>::SharedPtr all_robot_subscription_;
@@ -314,7 +316,7 @@ int main(int argc, char * argv[])
     rclcpp::init(argc, argv);
     auto node = std::make_shared<ui_design_node>();
     
-    RCLCPP_INFO(node->get_logger(), "5m场地定位测试节点已启动");
+    RCLCPP_INFO(node->get_logger(), "2800x1500cm场地定位节点已启动");
     RCLCPP_INFO(node->get_logger(), "等待接收数据...");
     RCLCPP_INFO(node->get_logger(), "提示：可使用以下命令发送测试数据：");
     RCLCPP_INFO(node->get_logger(), "  ros2 topic pub /test_data_topic tutorial_interfaces/msg/Detection \"{targets: [{class_name: 'R1', x: 1.0, y: 1.0}]}\"");

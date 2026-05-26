@@ -17,7 +17,7 @@ cv::Mat dist_coeffs;
 Location::Location(const std::string& calibrate_path, const std::string& map_config_path) {
     // region_height 初始化（新地图）
     std::map<std::string, double> region_height = {
-        {"Self_Tower", 0.25f}, {"Enemy_Tower", 0.25f}, {"Middle_High", 0.4f},
+        {"Self_Tower", 0.25f}, {"Enemy_Tower", 0.25f}, {"Middle_High", 0.3f},{"Assembly_Area", 0.4f},
         {"Self_Left_High", 0.473f}, {"Enemy_Left_High", 0.473f},
         {"Self_Ring_High", 0.2f}, {"Enemy_Ring_High", 0.2f}, {"Enemy_Buff", 0.8f}
     };
@@ -172,7 +172,8 @@ void Location::drawRegions(cv::Mat& frame, int thickness) const {
         {"Enemy_Ring_High", cv::Scalar(255, 0, 0)},
         {"Enemy_Buff", cv::Scalar(0, 0, 255)},
         {"Self_Left_High", cv::Scalar(255, 255, 255)},
-        {"Enemy_Left_High", cv::Scalar(255, 255, 255)}
+        {"Enemy_Left_High", cv::Scalar(255, 255, 255)},
+        {"Assembly_Area",cv::Scalar(0, 255, 255)}
     };
     for (const auto& kv : regions) {
         if (kv.second.points_2d.size() < 3) continue;

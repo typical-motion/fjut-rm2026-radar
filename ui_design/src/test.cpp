@@ -101,7 +101,7 @@ private:
                 {
                     std::string robot_id = target.class_name;
                     float x = target.x;
-                    float y = -target.y;
+                    float y = target.y;
                     if (std::find(red.begin(), red.end(), robot_id)!= red.end())
                     {
                         //vis_->addEnemy(robot_id, x, y);

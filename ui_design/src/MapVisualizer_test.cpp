@@ -8,7 +8,7 @@
 MapVisualizer::MapVisualizer(const std::string& map_path, int history_length)
     : map_path_(map_path),
       history_length_(history_length),
-      map_size_(5.0f, 5.0f),  // 修改为5m x 5m场地
+      map_size_(500.0f, 500.0f),  // 500cm x 500cm场地
       overlay_alpha_(0.7f)
 {
     map_img_ = loadMapImage();
@@ -17,7 +17,7 @@ MapVisualizer::MapVisualizer(const std::string& map_path, int history_length)
         map_height_ = map_img_.rows;
         map_width_ = map_img_.cols;
     } else {
-        // 创建默认的5m场地背景图
+        // 创建默认的500cm场地背景图
         original_map_ = cv::Mat(500, 500, CV_8UC3, cv::Scalar(30, 30, 30));  // 深灰色背景
         map_height_ = 500;
         map_width_ = 500;
@@ -39,32 +39,32 @@ MapVisualizer::MapVisualizer(const std::string& map_path, int history_length)
 // 添加绘制场地标记的方法
 void MapVisualizer::drawFieldMarkings(cv::Mat& img) {
     // 绘制中心点
-    cv::Point center = worldToPixel({2.5f, 2.5f});
+    cv::Point center = worldToPixel({250.0f, 250.0f});
     cv::circle(img, center, 10, cv::Scalar(255, 255, 255), 2);
     
     // 绘制中线
-    cv::line(img, 
-             worldToPixel({2.5f, 0.0f}),
-             worldToPixel({2.5f, 5.0f}),
+    cv::line(img,
+             worldToPixel({250.0f, 0.0f}),
+             worldToPixel({250.0f, 500.0f}),
              cv::Scalar(200, 200, 200), 2);
     
     // 绘制基地标记
     // 自方基地（左下）
     cv::rectangle(img,
-                  worldToPixel({0.2f, 0.2f}),
-                  worldToPixel({0.8f, 0.8f}),
+                  worldToPixel({20.0f, 20.0f}),
+                  worldToPixel({80.0f, 80.0f}),
                   cv::Scalar(255, 140, 0), 2);
-    
+
     // 敌方基地（右上）
     cv::rectangle(img,
-                  worldToPixel({4.2f, 4.2f}),
-                  worldToPixel({4.8f, 4.8f}),
+                  worldToPixel({420.0f, 420.0f}),
+                  worldToPixel({480.0f, 480.0f}),
                   cv::Scalar(0, 0, 255), 2);
     
     // 绘制文字标记
-    cv::putText(img, "Blue Base", worldToPixel({0.2f, 1.0f}),
+    cv::putText(img, "Blue Base", worldToPixel({20.0f, 100.0f}),
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 140, 0), 1);
-    cv::putText(img, "Red Base", worldToPixel({3.5f, 4.5f}),
+    cv::putText(img, "Red Base", worldToPixel({350.0f, 450.0f}),
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 255), 1);
 }
 
@@ -72,16 +72,16 @@ cv::Mat MapVisualizer::loadMapImage() {
     cv::Mat img = cv::imread(map_path_);
     if (img.empty()) {
         std::cerr << "警告: 地图图像未找到或无法加载 '" << map_path_ << "'\n";
-        std::cerr << "使用默认的5m场地模板\n";
+        std::cerr << "使用默认的500cm场地模板\n";
         return cv::Mat(500, 500, CV_8UC3, cv::Scalar(30, 30, 30));
     }
     return img;
 }
 
 cv::Point MapVisualizer::worldToPixel(const cv::Point2f& world_pos) const {
-    // 5m场地的坐标转换
-    float x_scale = map_width_ / map_size_.first;   // 500/5 = 100 pixels/m
-    float y_scale = map_height_ / map_size_.second; // 500/5 = 100 pixels/m
+    // 500cm场地的坐标转换
+    float x_scale = map_width_ / map_size_.first;   // 500/500 = 1 pixel/cm
+    float y_scale = map_height_ / map_size_.second; // 500/500 = 1 pixel/cm
     
     // 确保坐标在场地范围内
     float clamped_x = std::max(0.0f, std::min(world_pos.x, map_size_.first));
@@ -126,8 +126,8 @@ cv::Mat MapVisualizer::updateMap(const std::map<std::string, cv::Point2f>& enemy
     double current_time = std::time(nullptr);
     cv::Mat overlay = map_display.clone();
 
-    // 绘制网格线（1m间隔）
-    float grid_spacing = 1.0f;
+    // 绘制网格线（100cm间隔）
+    float grid_spacing = 100.0f;
     cv::Scalar grid_color(100, 100, 100);
     int grid_thickness = 1;
 
@@ -144,8 +144,8 @@ cv::Mat MapVisualizer::updateMap(const std::map<std::string, cv::Point2f>& enemy
                 grid_color, grid_thickness, cv::LINE_AA);
     }
 
-    // 绘制半米辅助线（更淡的线）
-    float half_grid_spacing = 0.5f;
+    // 绘制50cm辅助线（更淡的线）
+    float half_grid_spacing = 50.0f;
     cv::Scalar half_grid_color(60, 60, 60);
     
     for (float y = half_grid_spacing; y < map_size_.second; y += grid_spacing) {
@@ -230,7 +230,7 @@ cv::Mat MapVisualizer::updateMap(const std::map<std::string, cv::Point2f>& enemy
                 cv::Point(10, map_height_ - 10),
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255,255,255), 1);
 
-    // 比例尺（1米 = 100像素）
+    // 比例尺（100cm = 100像素）
     cv::Point scale_start(map_width_ - 120, map_height_ - 30);
     cv::Point scale_end  (map_width_ - 20,  map_height_ - 30);
     cv::line(map_display, scale_start, scale_end, cv::Scalar(255,255,255), 2);
@@ -238,9 +238,9 @@ cv::Mat MapVisualizer::updateMap(const std::map<std::string, cv::Point2f>& enemy
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255,255,255), 1);
 
     // 添加坐标轴标签
-    cv::putText(map_display, "X", worldToPixel({4.8f, 0.2f}),
+    cv::putText(map_display, "X", worldToPixel({480.0f, 20.0f}),
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(200,200,200), 1);
-    cv::putText(map_display, "Y", worldToPixel({0.2f, 4.8f}),
+    cv::putText(map_display, "Y", worldToPixel({20.0f, 480.0f}),
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(200,200,200), 1);
 
     last_update_time_ = current_time;
@@ -272,7 +272,7 @@ void MapVisualizer::clear() {
 }
 
 void MapVisualizer::addEnemy(const std::string& robot_id, float x, float y) {
-    // 对于5m场地，坐标范围是0-5，不需要Y轴反向
+    // 对于500cm场地，坐标范围是0-500，不需要Y轴反向
     current_enemy_positions_[robot_id] = cv::Point2f(x, y);
 }
 
@@ -291,7 +291,7 @@ cv::Mat MapVisualizer::getMapFrame() {
         cv::Mat map_display = original_map_.clone();
 
         // 绘制网格
-        float grid_spacing = 1.0f;
+        float grid_spacing = 100.0f;
         cv::Scalar grid_color(100, 100, 100);
 
         for (int y = 0; y <= static_cast<int>(map_size_.second); y += static_cast<int>(grid_spacing)) {

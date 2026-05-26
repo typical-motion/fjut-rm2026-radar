@@ -42,7 +42,7 @@ target_link_libraries(location_node
     PRIVATE
     Eigen3::Eigen
     ${OpenCV_LIBS}
-    yaml-cpp::yaml-cpp
+    yaml-cpp#::yaml-cpp
     ${rclcpp_LIBRARIES}
     ${tutorial_interfaces_LIBRARIES}
     ${geometry_msgs_LIBRARIES}

@@ -24,6 +24,8 @@
 #include <chrono>
 #include <memory>
 #include <future>
+#include <queue>
+#include <condition_variable>
 
 
 #include <opencv2/opencv.hpp>
@@ -154,7 +156,7 @@ public:
         //std::string armor_onnx = "/home/zqz/ros2_ws/model2/armor.onnx";
         inf_car_trt = std::make_unique<Inference_trt>(car_engine, cv::Size(640,640), classes_all, runOnGPU_);
         //inf_armor_onnx = std::make_unique<Inference>(armor_onnx, cv::Size(640,640), classes_armor, runOnGPU_);
-        inf_armor_trt = std::make_unique<Inference_trt>(armor_engine, cv::Size(1920,1920), classes_armor, runOnGPU_);
+        inf_armor_trt = std::make_unique<Inference_trt>(armor_engine, cv::Size(640,640), classes_armor, runOnGPU_);
         //inf_armor_ = std::make_unique<Inference>(inf_armor);
         // create TensorRT inference instance for car detection
         
@@ -314,267 +316,227 @@ private:
 
     void timerCallback()
     {
-        std::cout << "模式选择(test/hik):" << std::endl;
-        std::string mode;
-        std::cin >> mode;
-        
-        if (mode == "hik")
+        HikCamera hik_camera(hik_config); // PixelType_Gvsp_RGB8_Packed format
+        hik_camera.info();
+        std::cout << "开始采集 (HikCamera)" << std::endl;
+        bool running = true;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        std::cout << "是否保存处理后结果 (y/n)" << std::endl;
+        std::string save_option;
+        std::cin >> save_option;
+        bool save_enabled = (save_option == "y" || save_option == "Y");
+        int frame_count = 0;
+        int saved_frame_count = 0;
+        bool writer_open_failed = false;
+        const int output_fps = hik_config.frame_rate > 0.0f ? static_cast<int>(hik_config.frame_rate) : 30;
+
+        // 异步写入线程，避免 MJPEG 编码阻塞主循环导致 FPS 骤降
+        std::queue<cv::Mat> write_queue;
+        std::mutex write_mutex;
+        std::condition_variable write_cv;
+        std::atomic<bool> writer_running{false};
+        std::thread writer_thread;
+        const std::string save_path_copy = save_path;  // 捕获一份给线程使用
+
+        auto start_time = std::chrono::high_resolution_clock::now();
+        std::chrono::steady_clock::time_point fps_start_time = std::chrono::steady_clock::now();
+        int fps_frame_count = 0;
+        float fps_value = 0.0f;
+
+        cv::namedWindow("hik", cv::WINDOW_NORMAL);
+        cv::resizeWindow("hik", 800, 600);
+
+        // 启动异步视频写入线程
+        if (save_enabled) {
+            writer_running = true;
+            writer_thread = std::thread([&]() {
+                cv::VideoWriter writer;
+                while (writer_running) {
+                    cv::Mat frame_to_write;
+                    {
+                        std::unique_lock<std::mutex> lock(write_mutex);
+                        write_cv.wait_for(lock, std::chrono::milliseconds(100), [&] {
+                            return !write_queue.empty() || !writer_running;
+                        });
+                        if (!writer_running && write_queue.empty()) break;
+                        if (write_queue.empty()) continue;
+                        frame_to_write = write_queue.front();
+                        write_queue.pop();
+                    }
+                    if (!frame_to_write.empty()) {
+                        if (!writer.isOpened() && !writer_open_failed) {
+                            const int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+                            if (!writer.open(save_path_copy, fourcc, output_fps,
+                                             cv::Size(frame_to_write.cols, frame_to_write.rows), true)) {
+                                writer_open_failed = true;
+                                RCLCPP_ERROR(this->get_logger(), "Failed to open video writer: %s", save_path_copy.c_str());
+                            }
+                        }
+                        if (writer.isOpened()) {
+                            writer.write(frame_to_write);
+                            saved_frame_count++;
+                        }
+                    }
+                }
+                // 刷空残余帧
+                while (!write_queue.empty()) {
+                    cv::Mat remaining = write_queue.front();
+                    write_queue.pop();
+                    if (!remaining.empty() && writer.isOpened()) {
+                        writer.write(remaining);
+                        saved_frame_count++;
+                    }
+                }
+                if (writer.isOpened()) {
+                    writer.release();
+                }
+            });
+        }
+
+        while (running)
         {
-            HikCamera hik_camera(hik_config); // PixelType_Gvsp_RGB8_Packed format
-            hik_camera.info();
-            std::cout << "开始采集 (HikCamera)" << std::endl;
-            bool running = true;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
 
-            cv::VideoWriter writer;
-            std::cout << "是否保存处理后结果 (y/n)" << std::endl;
-            std::string save_option;
-            std::cin >> save_option;
-            int frame_count = 0;
-
-            auto start_time = std::chrono::high_resolution_clock::now();
-            std::chrono::steady_clock::time_point fps_start_time = std::chrono::steady_clock::now();
-            int fps_frame_count = 0;
-            float fps_value = 0.0f;
-            while (running)
+            cv::Mat frame_rgb = hik_camera.getLatestFrame();
+            if (frame_rgb.empty())
             {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
 
-                cv::Mat frame_rgb = hik_camera.getLatestFrame();//海康录取到的通道和实际通道存在问题，直接使用opencv修改，其实可以直接改驱动（目前直接堆一个vector存frame
-                stl_video.push_back(frame_rgb);
-                cv::cvtColor(frame_rgb, frame, cv::COLOR_RGB2BGR);
-                if (frame.empty())
+            cv::cvtColor(frame_rgb, frame, cv::COLOR_RGB2BGR);
+            if (frame.empty())
+            {
+                RCLCPP_ERROR(this->get_logger(), "Failed to convert frame");
+                continue;
+            }//帧检查
+
+
+            //读取保存路径并设置格式
+
+            // --- 推理: 车辆 (TensorRT) ---
+            std::vector<Detection> detections;
+            try 
+            {
+                detections = inferencethrow_trt(*inf_car_trt, frame);
+                //detections = inferencethrow_onnx(*inf_car_onnx, frame);
+            } 
+            catch (const std::exception& e) 
+            {
+                RCLCPP_ERROR(this->get_logger(), "Inference error: %s", e.what());
+                return;
+            }
+
+            // Convert detections to byte_track::Object and update tracker
+            std::vector<byte_track::Object> objects = detectionsToObjects(detections);
+            std::vector<std::shared_ptr<STrack>> tracked = tracker_.update(objects);
+
+
+            // draw and publish
+            std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
+            //std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_onnx);
+            std::vector<Detection> result_detections_armor = std::get<0>(result);
+            std::vector<cv::Point2f> result_points = std::get<1>(result);
+            std::vector<std::string> classes_name;
+            auto msg = tutorial_interfaces::msg::Detection();
+            for (int i = 0; i < result_detections_armor.size() && i < result_points.size(); i++)
+            {
+                tutorial_interfaces::msg::Target target_msg;
+                    //msg.class_number = result_detections_armor.size();
+                target_msg.confidence = result_detections_armor[i].confidence;
+                target_msg.class_name = result_detections_armor[i].className;
+                target_msg.x = result_points[i].x;
+                target_msg.y = result_points[i].y;
+                RCLCPP_DEBUG(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
+                msg.targets.push_back(target_msg);
+
+                    
+                    //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
+                    
+            }
+            publisher_detection->publish(msg);
+            frame_count++;
+
+            fps_frame_count++;
+            auto fps_now = std::chrono::steady_clock::now();
+            float fps_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    fps_now - fps_start_time).count();
+
+            if (fps_elapsed >= 200.0f)   // 每 1 秒更新一次
+            {
+                fps_value = fps_frame_count * 1000.0f / fps_elapsed;
+                fps_frame_count = 0;
+                fps_start_time = fps_now;
+            }
+
+            cv::rectangle(frame, cv::Point(5,5), cv::Point(220,45), cv::Scalar(0,0,0), -1); // 黑底
+            cv::putText(
+                frame,
+                cv::format("FPS: %.2f", fps_value),
+                cv::Point(10, 35),
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.9,
+                cv::Scalar(0, 255, 0),
+                2
+            );
+
+            if (save_enabled && !writer_open_failed)
+            {
+                // 将标注帧推入异步写入队列，不阻塞主循环
                 {
-                    RCLCPP_ERROR(this->get_logger(), "Failed to get frame");
-                    return;
-                }//帧检查
-
-
-                //读取保存路径并设置格式
-
-                // --- 推理: 车辆 (TensorRT) ---
-                std::vector<Detection> detections;
-                try 
-                {
-                    detections = inferencethrow_trt(*inf_car_trt, frame);
-                    //detections = inferencethrow_onnx(*inf_car_onnx, frame);
-                } 
-                catch (const std::exception& e) 
-                {
-                    RCLCPP_ERROR(this->get_logger(), "Inference error: %s", e.what());
-                    return;
+                    std::lock_guard<std::mutex> lock(write_mutex);
+                    if (write_queue.size() < 300) {
+                        write_queue.push(frame.clone());
+                    }
                 }
+                write_cv.notify_one();
+            }
 
-                // Convert detections to byte_track::Object and update tracker
-                std::vector<byte_track::Object> objects = detectionsToObjects(detections);
-                std::vector<std::shared_ptr<STrack>> tracked = tracker_.update(objects);
+            cv::imshow("hik", frame);
 
+            if (frame_count % 30 == 0)
+            {
+                auto current_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> elapsed = current_time - start_time;
+                double fps_calculated = frame_count / elapsed.count();
+                std::cout << "Processed Frames: " << fps_value << " | FPS: " << fps_calculated << std::endl;
+            }
 
-                // draw and publish
-                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
-                //std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_onnx);
-                std::vector<Detection> result_detections_armor = std::get<0>(result);
-                std::vector<cv::Point2f> result_points = std::get<1>(result);
-                std::vector<std::string> classes_name;
-                auto msg = tutorial_interfaces::msg::Detection();
-                for (int i = 0; i < result_detections_armor.size() && i < result_points.size(); i++)
+            if (cv::waitKey(1) == 27)
+            {
+                running = false;
+                if (save_enabled)
                 {
-                    tutorial_interfaces::msg::Target target_msg;
-                        //msg.class_number = result_detections_armor.size();
-                    target_msg.confidence = result_detections_armor[i].confidence;
-                    target_msg.class_name = result_detections_armor[i].className;
-                    target_msg.x = result_points[i].x;
-                    target_msg.y = result_points[i].y;
-                    RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
-                    msg.targets.push_back(target_msg);
-
-                        
-                        //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
-                        
-                }
-                publisher_detection->publish(msg);
-                frame_count++;
-
-                fps_frame_count++;
-                auto fps_now = std::chrono::steady_clock::now();
-                float fps_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        fps_now - fps_start_time).count();
-
-                if (fps_elapsed >= 200.0f)   // 每 1 秒更新一次
-                {
-                    fps_value = fps_frame_count * 1000.0f / fps_elapsed;
-                    fps_frame_count = 0;
-                    fps_start_time = fps_now;
-                }
-
-                cv::rectangle(frame, cv::Point(5,5), cv::Point(220,45), cv::Scalar(0,0,0), -1); // 黑底
-                cv::putText(
-                    frame,
-                    cv::format("FPS: %.2f", fps_value),
-                    cv::Point(10, 35),
-                    cv::FONT_HERSHEY_SIMPLEX,
-                    0.9,
-                    cv::Scalar(0, 255, 0),
-                    2
-                );
-
-                cv::namedWindow("hik",cv::WINDOW_NORMAL);
-                cv::resizeWindow("hik",800,600);
-                cv::imshow("hik", frame);
-
-                if (frame_count % 30 == 0) 
-                {
-                    auto current_time = std::chrono::high_resolution_clock::now();
-                    std::chrono::duration<double> elapsed = current_time - start_time;
-                    double fps_calculated = frame_count / elapsed.count();  // 计算FPS
-                    std::cout << "Processed Frames: " << fps_value << " | FPS: " << fps_calculated << std::endl;
-                }
-
-                if (cv::waitKey(1) == 27)
-                {
-                    running = false;
                     std::cout << "\n正在停止录制并保存文件..." << std::endl;
                 }
             }
-
-            cv::destroyAllWindows();
-            
-            // if (recording_started && hik_camera.isRecording())
-            // {
-            //     hik_camera.stopRecording();
-            // }
-            std::cout << "已储存" << stl_video.size() << "帧" << std::endl;
-            std::cout << "正在处理视频..." << std::endl;
-            if (save_option == "y")
-            {
-                int width = stl_video[1].cols;
-                int height = stl_video[1].rows;
-                fourcc_code = 0;
-                if (fourcc_code == 0)
-                {
-                    fourcc_code = cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
-                }
-
-                writer.open(save_path, fourcc_code, 30, cv::Size(width, height), true);
-
-                if (!writer.isOpened())
-                {
-                    std::cerr << "[VIDEO ERROR] Failed to open video writer!" << std::endl;
-                    return;
-                }
-
-
-                for (const auto frame : stl_video)
-                {
-                    writer.write(frame);
-                }
-            }
-            std::cout << "程序结束，视频已保存至: " << save_path << std::endl;
         }
-        else if (mode == "test")
+
+        cv::destroyWindow("hik");
+
+        cv::destroyAllWindows();
+
+        // 停止异步写入线程
+        if (save_enabled && writer_running) {
+            std::cout << "\n正在停止录制并保存文件..." << std::endl;
+            writer_running = false;
+            write_cv.notify_all();
+            if (writer_thread.joinable()) {
+                writer_thread.join();
+            }
+        }
+
+        if (save_enabled && !writer_open_failed)
         {
-            cap_.open("/home/zqz/ros2_ws/image/raw.mp4");
-            //cap_.open("/home/zqz/ros2_ws/image/test2.mp4");
-            if (!cap_.isOpened())
-            {
-                RCLCPP_ERROR(this->get_logger(), "Failed to open video");
-                return;
-            }
-            RCLCPP_INFO(this->get_logger(), "Video opened");
-            bool running = true;
-            std::chrono::steady_clock::time_point fps_start_time = std::chrono::steady_clock::now();
-            auto avg_start_time = fps_start_time;
-            int fps_frame_count = 0;
-            float fps_value = 0.0f;
-            size_t total_frame_count = 0;
-            while (running)
-            {
-                cap_ >> frame;
-                //cv::Mat frame = cv::imread("/home/zqz/ros2_ws/image/test_image.jpg");
-                if (frame.empty())
-                {
-                    running = false;
-                    break;
-                }
-
-                
-
-                // --- 推理: 车辆 (TensorRT) ---
-                std::vector<Detection> detections;
-                try {
-                    detections = inferencethrow_trt(*inf_car_trt, frame);
-                    //detections = inferencethrow_onnx(*inf_car_onnx, frame);
-                } catch (const std::exception& e) {
-                    RCLCPP_ERROR(this->get_logger(), "Inference error: %s", e.what());
-                    return;
-                }
-
-                // tracking
-                std::vector<byte_track::Object> objects = detectionsToObjects(detections);
-                std::vector<std::shared_ptr<STrack>> tracked = tracker_.update(objects);
-
-
-                // draw and publish
-                std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_trt);
-                //std::tuple<std::vector<Detection>, std::vector<cv::Point2f>> result = processAndPublishTracks(tracked, frame, *inf_armor_onnx);
-                std::vector<Detection> result_detections_armor = std::get<0>(result);
-                std::vector<cv::Point2f> result_points = std::get<1>(result);
-                std::vector<std::string> classes_name;
-                auto msg = tutorial_interfaces::msg::Detection();
-                for (int i = 0; i < result_detections_armor.size() && i < result_points.size(); i++)
-                {
-                    tutorial_interfaces::msg::Target target_msg;
-                        //msg.class_number = result_detections_armor.size();
-                    target_msg.confidence = result_detections_armor[i].confidence;
-                    target_msg.class_name = result_detections_armor[i].className;
-                    target_msg.x = result_points[i].x;
-                    target_msg.y = result_points[i].y;
-                    RCLCPP_INFO(this->get_logger(), "armor_result: %s, %f, %f , %f,", target_msg.class_name.c_str(), target_msg.x, target_msg.y, target_msg.confidence);
-                    msg.targets.push_back(target_msg);
-
-                        
-                        //RCLCPP_INFO(this->get_logger(), "一共有: %i 个目标", msg.class_number);
-
-                }
-                publisher_detection->publish(msg);
-                fps_frame_count++;
-                auto fps_now = std::chrono::steady_clock::now();
-                float fps_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        fps_now - fps_start_time).count();
-
-                if (fps_elapsed >= 200.0f)
-                {
-                    fps_value = fps_frame_count * 1000.0f / fps_elapsed;
-                    fps_frame_count = 0;
-                    fps_start_time = fps_now;
-                }
-
-                total_frame_count++;
-
-                cv::rectangle(frame, cv::Point(5,5), cv::Point(220,45), cv::Scalar(0,0,0), -1);
-                cv::putText(
-                    frame,
-                    cv::format("FPS: %.2f", fps_value),
-                    cv::Point(10, 35),
-                    cv::FONT_HERSHEY_SIMPLEX,
-                    0.9,
-                    cv::Scalar(0, 255, 0),
-                    2
-                );
-                cv::namedWindow("hik",cv::WINDOW_NORMAL);
-                cv::resizeWindow("hik",800,600);
-                cv::imshow("hik", frame);
-                if (cv::waitKey(1) == 27)
-                {
-                    cv::destroyAllWindows();
-                    running = false;
-                }
-            }
-            auto avg_end_time = std::chrono::steady_clock::now();
-            double total_time_sec = std::chrono::duration_cast<std::chrono::duration<double>>(avg_end_time - avg_start_time).count();
-            double avg_fps = total_frame_count / std::max(total_time_sec, 1e-6);
-            RCLCPP_INFO(
-            this->get_logger(),
-            "Test video finished. Total frames: %zu, Time: %.2f s, Average FPS: %.2f", total_frame_count, total_time_sec, avg_fps);
+            std::cout << "已保存" << saved_frame_count << "帧到: " << save_path << std::endl;
+        }
+        else if (save_enabled)
+        {
+            std::cout << "视频保存失败，未生成文件: " << save_path << std::endl;
+        }
+        else
+        {
+            std::cout << "未启用保存，程序结束" << std::endl;
         }
     }
 
@@ -597,8 +559,6 @@ private:
     cv::Mat frame;
     cv::Size frame_size;
     std::string save_path = "/home/zqz/ros2_ws/output.avi";
-    std::vector<cv::Mat> stl_video;
-    int fourcc_code;
 };
 
 int main(int argc, char** argv)

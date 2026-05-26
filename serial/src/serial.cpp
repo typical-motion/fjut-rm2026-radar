@@ -469,18 +469,11 @@ map<std::string,int> mark_value =
             {
                 for (const auto& [robot_id, pos] : *position)
                 {
-                    int x = static_cast<int>(pos.first * 100 +0.5f);
-                    int y = static_cast<int>(pos.second * 100 +0.5f);
+                    int x = static_cast<int>(pos.first + 0.5f);
+                    int y = static_cast<int>(pos.second + 0.5f);
                     if (send_map.count(robot_id))
                     {
-                        if (color_ == 'R')
-                        {
-                            send_map[robot_id] = {x, 1500 - y};
-                        }
-                        else
-                        {
-                            send_map[robot_id] = {x, y};
-                        }
+                        send_map[robot_id] = {x, y};
                     }
                 }
             }

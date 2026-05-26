@@ -19,9 +19,9 @@ public:
         : Node("serial_node")
     {
         // 串口参数声明 (可通过 YAML 文件或命令行参数覆盖)
-        this->declare_parameter("port", "/dev/ttyUSB0");
+        this->declare_parameter("port", "/dev/ttyUSB1");
         this->declare_parameter("baudrate", 115200);
-        this->declare_parameter("color", "R");
+        this->declare_parameter("color", "B");
         this->declare_parameter("debug", false);
 
         // 获取参数
@@ -42,7 +42,7 @@ public:
             return;
         }
 
-        Subscription_key = this->create_subscription<std_msgs::msg::String>("key_topic",10,std::bind(&serialnode::key_message_callback, this, std::placeholders::_1));
+        Subscription_key = this->create_subscription<tutorial_interfaces::msg::Detection>("/radar/detection",10,std::bind(&serialnode::key_message_callback, this, std::placeholders::_1));
         subscription_ = this->create_subscription<tutorial_interfaces::msg::Detection>(
             "parsed_topic", 10,
             std::bind(&serialnode::message_callback, this, std::placeholders::_1));
@@ -110,15 +110,12 @@ private:
             {
                 while (running_)
                 {
-                    std::lock_guard<std::mutex> lock(map_mutex_);
-                    if (has_data_)
                     {
-                        serial_manager_->send_serial(&robot_map_);
-                    }
-                    if (key_changed_)
-                    {
-                        serial_manager_->send_serial_key(0, 2, key_);
-                        key_changed_ = false;
+                        std::lock_guard<std::mutex> lock(map_mutex_);
+                        if (has_data_)
+                        {
+                            serial_manager_->send_serial(&robot_map_);
+                        }
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 }
@@ -145,14 +142,14 @@ private:
         has_data_ = true;
     }
 
-    void key_message_callback(const std_msgs::msg::String::SharedPtr msg)
+    void key_message_callback(std::shared_ptr<const tutorial_interfaces::msg::Detection> msg)
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
-
-        if (msg->data != key_)
-        key_changed_ = true;
-
-        key_ = msg->data;
+        for (const auto& target : msg->targets)
+        {
+            robot_map_[target.class_name] = {target.x, target.y};
+        }
+        has_data_ = true;
     }
 
     void wave_level_callback()
@@ -202,7 +199,7 @@ private:
     std::unordered_map<std::string, std::pair<float, float>> robot_map_;
     std::mutex map_mutex_;
     rclcpp::Subscription<tutorial_interfaces::msg::Detection>::SharedPtr subscription_;
-    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr Subscription_key;
+    rclcpp::Subscription<tutorial_interfaces::msg::Detection>::SharedPtr Subscription_key;
     std::string key_{};
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr wave_level_publisher_;
     rclcpp::TimerBase::SharedPtr wave_level_timer_;

@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ldconfig -p)",
+      "Read(//home/zqz/ros2_ws/**)",
+      "Bash(colcon build *)",
+      "WebFetch(domain:www.google.com)",
+      "Bash(apt list *)",
+      "Bash(pdftotext \"/home/zqz/ros2_ws/serial/RoboMaster 2026 机甲大师高校系列赛通信协议 V1.3.0（20260327） \\(1\\).pdf\" /tmp/rm_protocol.txt)",
+      "Read(//tmp/**)",
+      "Bash(python3 *)",
+      "Bash(git *)",
+      "Bash(pdftotext -layout \"/home/zqz/ros2_ws/serial/RoboMaster 2026 机甲大师高校系列赛通信协议 V1.3.0（20260327） \\(1\\).pdf\" /tmp/protocol.txt)",
+      "Bash(sed -n '883p;972p;992p' /home/zqz/ros2_ws/serial/src/serial_node.cpp)",
+      "Bash(sed -n '883p;972p;992p' /home/zqz/ros2_ws/serial/src/serial3.cpp)",
+      "Bash(uv --version)",
+      "Bash(pip show *)",
+      "Bash(uv venv *)",
+      "Bash(/home/zqz/ros2_ws/radar_receiver/.venv/bin/python3 *)",
+      "Bash(pip list *)",
+      "Bash(dpkg -L soapysdr0.8-module-all)",
+      "Bash(dpkg -L soapysdr-tools)",
+      "Bash(pip search *)",
+      "Bash(sudo apt *)",
+      "Bash(dpkg -l python3-soapysdr)",
+      "Read(//usr/lib/python3/dist-packages/**)",
+      "Bash(ln -s /usr/lib/python3/dist-packages/SoapySDR.py /home/zqz/ros2_ws/radar_receiver/.venv/lib/python3.10/site-packages/SoapySDR.py)",
+      "Bash(ln -s /usr/lib/python3/dist-packages/_SoapySDR.cpython-310-x86_64-linux-gnu.so /home/zqz/ros2_ws/radar_receiver/.venv/lib/python3.10/site-packages/_SoapySDR.cpython-310-x86_64-linux-gnu.so)",
+      "Bash(dpkg -L libgnuradio-soapy3.10.1)",
+      "Read(//usr/lib/**)",
+      "Bash(dpkg -l libusb-1.0-0)",
+      "Bash(nm -D /lib/x86_64-linux-gnu/libusb-1.0.so.0)",
+      "Bash(readelf -s /lib/x86_64-linux-gnu/libusb-1.0.so.0)",
+      "Bash(dpkg -l libusb-1.0-0*)",
+      "Bash(ldd /lib/x86_64-linux-gnu/libLimeSuite.so.20.10-1)",
+      "Bash(find / -name \"*pluto*\" -path \"*soapy*\")",
+      "Bash(find / -name \"*Pluto*\" -path \"*Soapy*\")",
+      "Read(//usr/local/**)"
+    ]
+  }
+}

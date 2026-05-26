@@ -8,6 +8,20 @@
 #include <utility>
 #include <vector>
 
+namespace
+{
+constexpr std::size_t kMaxTrackHistory = 200;
+
+template <typename T>
+void trimTrackHistory(std::vector<T>& tracks)
+{
+    if (tracks.size() > kMaxTrackHistory)
+    {
+        tracks.erase(tracks.begin(), tracks.end() - static_cast<std::ptrdiff_t>(kMaxTrackHistory));
+    }
+}
+}
+
 byte_track::BYTETracker::BYTETracker(const int& frame_rate,
                                      const int& track_buffer,
                                      const float& track_thresh,
@@ -214,6 +228,10 @@ std::vector<byte_track::BYTETracker::STrackPtr> byte_track::BYTETracker::update(
     removeDuplicateStracks(tracked_stracks_, lost_stracks_, tracked_stracks_out, lost_stracks_out);
     tracked_stracks_ = tracked_stracks_out;
     lost_stracks_ = lost_stracks_out;
+
+    trimTrackHistory(tracked_stracks_);
+    trimTrackHistory(lost_stracks_);
+    trimTrackHistory(removed_stracks_);
 
     std::vector<STrackPtr> output_stracks;
     for (const auto &track : tracked_stracks_)

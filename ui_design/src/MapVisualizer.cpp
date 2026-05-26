@@ -8,7 +8,7 @@
 MapVisualizer::MapVisualizer(const std::string& map_path, int history_length)
     : map_path_(map_path),
       history_length_(history_length),
-      map_size_(28.0f, 15.0f),
+      map_size_(2800.0f, 1500.0f),
       overlay_alpha_(0.7f)
 {
     map_img_ = loadMapImage();
@@ -82,7 +82,7 @@ cv::Mat MapVisualizer::updateMap(const std::map<std::string, cv::Point2f>& enemy
     double current_time = std::time(nullptr);
     cv::Mat overlay = map_display.clone();
 
-    float grid_spacing = 5.0f;
+    float grid_spacing = 500.0f;
     cv::Scalar grid_color(150, 150, 150);
 
     for (int y = 0; y <= static_cast<int>(map_size_.second); y += static_cast<int>(grid_spacing)) {
@@ -171,12 +171,11 @@ void MapVisualizer::clear() {
 }
 
 void MapVisualizer::addEnemy(const std::string& robot_id, float x, float y) {
-    // y轴反向
-    current_enemy_positions_[robot_id] = cv::Point2f(x, 15.0f - y);
+    current_enemy_positions_[robot_id] = cv::Point2f(x, y);
 }
 
 void MapVisualizer::addFriendly(const std::string& robot_id, float x, float y) {
-    current_friendly_positions_[robot_id] = cv::Point2f(x, 15.0f - y);
+    current_friendly_positions_[robot_id] = cv::Point2f(x, y);
 }
 
 void MapVisualizer::update() {
@@ -189,7 +188,7 @@ cv::Mat MapVisualizer::getMapFrame() {
     if (current_map_frame_.empty()) {
         cv::Mat map_display = original_map_.clone();
 
-        float grid_spacing = 5.0f;
+        float grid_spacing = 500.0f;
         cv::Scalar grid_color(150, 150, 150);
 
         for (int y = 0; y <= static_cast<int>(map_size_.second); y += static_cast<int>(grid_spacing)) {
